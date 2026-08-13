@@ -1,0 +1,70 @@
+========================================================
+  INOVE REPRESENTACOES - SISTEMA DE PEDIDOS
+  Como abrir pela primeira vez (Windows)
+========================================================
+
+PASSO 0 - EXTRAIA O ZIP  (o mais esquecido!)
+   Clique com o botao DIREITO no arquivo ZIP que voce baixou
+   -> "Extrair tudo..." -> "Extrair".
+   Se voce clicar nos arquivos DE DENTRO do ZIP, nada funciona.
+
+PASSO 1 - INSTALE O NODE.JS (so uma vez, e de graca)
+   Site: https://nodejs.org/pt-br/download
+   Baixe a versao LTS e instale clicando em "Next" ate o fim.
+
+PASSO 2 - ABRA O SISTEMA
+   Na pasta extraida, clique duas vezes em:
+       iniciar-windows.bat
+
+   Vai abrir uma janela preta com um quadro escrito
+   "INOVE Representacoes - Sistema de Pedidos" e o endereco.
+   O navegador abre sozinho em poucos segundos.
+
+   >> NAO FECHE A JANELA PRETA enquanto estiver usando. <<
+
+PASSO 3 - ENTRE
+       E-mail: admin@local
+       Senha:  admin123
+
+--------------------------------------------------------
+  USAR NO CELULAR PELO WI-FI
+--------------------------------------------------------
+1. Deixe o computador ligado com a janela preta aberta.
+2. Na janela preta aparece uma linha assim:
+       No celular/tablet:  http://192.168.0.15:3000
+3. Digite esse endereco no navegador do celular.
+   O celular precisa estar na MESMA rede Wi-Fi do computador.
+
+Se o celular nao abrir, o firewall do Windows esta bloqueando:
+   clique com o botao DIREITO em  liberar-firewall.bat
+   e escolha "Executar como administrador". Depois tente de novo.
+
+--------------------------------------------------------
+  FOTO DOS PRODUTOS
+--------------------------------------------------------
+Em Produtos -> Editar -> botao "Escolher / tirar foto".
+Pelo celular o botao abre a camera: da para fotografar o
+produto na hora. Depois use "Catalogo PDF" para mandar a
+lista com fotos e precos no WhatsApp do cliente.
+
+--------------------------------------------------------
+  RELATORIO DE VENDAS DO MES
+--------------------------------------------------------
+Menu "Relatorios" -> escolha o mes -> Gerar.
+Botoes: Ver PDF, Baixar, Imprimir e WhatsApp
+(o WhatsApp ja abre com o resumo escrito).
+
+--------------------------------------------------------
+  QUER QUE OUTRAS PESSOAS USEM?
+--------------------------------------------------------
+Do jeito acima, o sistema roda so no seu computador.
+Para virar um site que qualquer um abre no celular,
+sem instalar nada, siga o arquivo:
+    PUBLICAR-NA-INTERNET.md
+(custa cerca de R$ 28 por mes e leva 20 minutos)
+
+--------------------------------------------------------
+  DEU ALGUM ERRO?
+--------------------------------------------------------
+Tire uma FOTO DA JANELA PRETA inteira e me mande.
+A mensagem de erro fica escrita ali.

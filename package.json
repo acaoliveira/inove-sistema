@@ -1,0 +1,13 @@
+{
+  "name": "sistema-representacao",
+  "version": "1.0.0",
+  "description": "Sistema de representação comercial: pedidos, cotações, produtos, tabelas de preço, clientes e metas",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "exemplo": "node seed-exemplo.js"
+  },
+  "engines": { "node": ">=22.5.0" },
+  "dependencies": {}
+}

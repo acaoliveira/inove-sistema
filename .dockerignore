@@ -1,0 +1,5 @@
+dados/
+node_modules/
+*.log
+*.zip
+.git/
