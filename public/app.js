@@ -33,6 +33,36 @@ const curto = (v) => {
   return dinheiro(x);
 };
 const pct = (v) => n(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%';
+
+/* ---- valores digitados no padrão brasileiro (35.000,00 e não 35000.00) ---- */
+/** Escreve o número como o brasileiro lê: 35.000,00 (vazio continua vazio) */
+const moedaBR = (v) => (v === '' || v === null || v === undefined || Number.isNaN(Number(v)))
+  ? '' : Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** Lê o que a pessoa digitou aceitando 35.000,00 / 35000,00 / 35000 / 35.000 */
+function numBR(txt) {
+  if (typeof txt === 'number') return txt;
+  let s = String(txt ?? '').trim().replace(/[R$\s ]/g, '');
+  if (!s) return 0;
+  const negativo = /^-/.test(s);
+  s = s.replace(/[^\d.,]/g, '');
+  if (s.includes(',')) {
+    s = s.replace(/\./g, '').replace(',', '.');          // vírgula é a casa decimal
+  } else if (s.includes('.')) {
+    const partes = s.split('.');
+    const ultima = partes[partes.length - 1];
+    // "35.000" e "1.234.567" são milhares; "35.5" é decimal
+    if (partes.length > 2 || ultima.length === 3) s = partes.join('');
+  }
+  const v = Number(s);
+  return Number.isNaN(v) ? 0 : (negativo ? -v : v);
+}
+/** Formata o campo assim que a pessoa sai dele */
+function ligarCamposBR(seletor, aoMudar) {
+  $$(seletor).forEach(el => {
+    el.addEventListener('focus', () => { if (el.value) el.value = String(numBR(el.value)).replace('.', ','); el.select?.(); });
+    el.addEventListener('blur', () => { el.value = el.value.trim() === '' ? '' : moedaBR(numBR(el.value)); aoMudar?.(); });
+  });
+}
 const dataBR = (s) => (s && /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10).split('-').reverse().join('/') : (s || '-'));
 const hojeISO = () => new Date().toLocaleDateString('sv-SE');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -96,6 +126,10 @@ function reduzirImagem(arquivo, max = 900, qualidade = 0.82) {
 const fotoProduto = (p) => p.imagem
   ? `<img class="foto-prod" src="/api/produtos/${p.id}/imagem?v=${encodeURIComponent(p.imagem)}" alt="">`
   : '<span class="foto-prod vazia">sem foto</span>';
+/** Miniatura da logomarca da representada (lista e cabeçalho do pedido) */
+const logoRep = (r) => r && r.logo
+  ? `<img class="logo-rep" src="/api/representadas/${r.id}/logo?v=${encodeURIComponent(r.logo)}" alt="${esc(r.nome || '')}">`
+  : '<span class="logo-rep vazia">sem logo</span>';
 
 const ETIQUETAS = {
   rascunho: ['etq-cinza', 'Rascunho'], aberto: ['etq-azul', 'Aberto'], enviado: ['etq-laranja', 'Enviado'],
@@ -171,7 +205,7 @@ $$('#menu .item').forEach(a => a.addEventListener('click', () => { location.hash
 const telas = {};
 async function rotear() {
   const partes = (location.hash.replace(/^#\/?/, '') || 'painel').split('/');
-  const nome = partes[0];
+  const nome = partes[0].split('?')[0];   // "#/comissoes?de=..." → "comissoes"
   $$('#menu .item').forEach(a => a.classList.toggle('ativo', a.dataset.tela === nome ||
     (nome === 'pedido' && a.dataset.tela === 'pedidos') || (nome === 'cotacao' && a.dataset.tela === 'cotacoes')));
   $('#menu').classList.remove('aberto'); $('#fundo-menu').classList.remove('on');
@@ -185,6 +219,95 @@ window.addEventListener('hashchange', rotear);
 const titulo = (t) => { $('#titulo-tela').textContent = t; };
 const acoes = (html) => { $('#topo-acoes').innerHTML = html; };
 const pintar = (html) => { $('#tela').innerHTML = html; };
+
+/* =========================================================================
+   GRÁFICOS — paleta e componentes (sem biblioteca externa)
+   ========================================================================= */
+// Paleta categórica validada para daltonismo. A ordem é fixa: a cor segue a
+// entidade, nunca a posição no ranking.
+const CORES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'];
+const COR_META = '#c9c9cf';
+const COR_OK = '#0ca30c';        // recebido / bom
+const COR_ESPERA = '#fab219';    // pendente / atenção
+
+/** Dica flutuante: qualquer elemento com data-dica mostra o texto ao passar o mouse */
+function ligarDicas() {
+  if (window.__dicaPronta) return;
+  window.__dicaPronta = true;
+  const d = document.createElement('div');
+  d.id = 'dica'; d.setAttribute('role', 'tooltip');
+  document.body.appendChild(d);
+  document.addEventListener('mouseover', e => {
+    const alvo = e.target.closest('[data-dica]');
+    if (!alvo) return;
+    d.innerHTML = alvo.dataset.dica;
+    d.classList.add('on');
+  });
+  document.addEventListener('mousemove', e => {
+    if (!d.classList.contains('on')) return;
+    const larg = d.offsetWidth, alt = d.offsetHeight;
+    d.style.left = Math.min(window.innerWidth - larg - 10, Math.max(8, e.clientX + 14)) + 'px';
+    d.style.top = Math.max(8, e.clientY - alt - 12) + 'px';
+  });
+  document.addEventListener('mouseout', e => {
+    if (e.target.closest('[data-dica]')) d.classList.remove('on');
+  });
+}
+
+/** Colunas agrupadas: realizado x meta, mês a mês */
+function graficoColunas(serie, ano) {
+  const max = Math.max(...serie.map(s => Math.max(s.realizado, s.meta)), 1);
+  const mesAtual = new Date().getMonth() + 1;
+  const esteAno = ano === new Date().getFullYear();
+  return `
+  <div class="gr">
+    <div class="gr-plot">
+      ${serie.map(s => {
+        const p = s.meta ? (s.realizado / s.meta) * 100 : 0;
+        const destaque = esteAno && s.mes === mesAtual;
+        return `<div class="gr-col${destaque ? ' agora' : ''}" data-dica="<b>${s.nome}/${ano}</b><br>Realizado ${dinheiro(s.realizado)}<br>Meta ${dinheiro(s.meta)}${s.meta ? '<br>' + pct(p) + ' da meta' : ''}">
+          <div class="gr-barras">
+            <span class="gr-b${s.realizado > 0 ? '' : ' zero'}" style="height:${(s.realizado / max) * 100}%;background:${CORES[0]}"></span>
+            <span class="gr-b${s.meta > 0 ? '' : ' zero'}" style="height:${(s.meta / max) * 100}%;background:${COR_META}"></span>
+          </div>
+          <div class="gr-rot">${s.nome}</div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="legenda">
+      <span><i style="background:${CORES[0]}"></i>Realizado</span>
+      <span><i style="background:${COR_META}"></i>Meta</span>
+      <span style="margin-left:auto">maior valor do gráfico: ${dinheiro(max)}</span>
+    </div>
+  </div>`;
+}
+
+/** Barras horizontais com rótulo e valor visíveis */
+function graficoBarras(itens) {
+  const max = Math.max(...itens.map(i => i.valor), 1);
+  const soma = itens.reduce((s, i) => s + i.valor, 0);
+  if (!itens.length || soma <= 0) return '<div class="vazio">Sem vendas no período.</div>';
+  return `<div class="gr-h">${itens.map((i, k) => `
+    <div class="gr-h-linha" data-dica="<b>${esc(i.nome)}</b><br>${dinheiro(i.valor)}${soma ? '<br>' + pct((i.valor / soma) * 100) + ' do total' : ''}">
+      <span class="gr-h-rot" title="${esc(i.nome)}">${esc(i.nome)}</span>
+      <span class="gr-h-trilho"><span class="gr-h-barra" style="width:${(i.valor / max) * 100}%;background:${CORES[k % CORES.length]}"></span></span>
+      <span class="gr-h-val">${dinheiro(i.valor)}</span>
+    </div>`).join('')}</div>`;
+}
+
+/** Barra de proporção com duas partes rotuladas */
+function graficoProporcao(partes) {
+  const total = partes.reduce((s, p) => s + p.valor, 0);
+  if (total <= 0) return '<div class="vazio">Nada a mostrar ainda.</div>';
+  return `
+    <div class="gr-pilha">${partes.map(p => `
+      <span style="width:${(p.valor / total) * 100}%;background:${p.cor}"
+        data-dica="<b>${p.icone} ${esc(p.nome)}</b><br>${dinheiro(p.valor)}<br>${pct((p.valor / total) * 100)} do total"></span>`).join('')}
+    </div>
+    <div class="legenda">${partes.map(p => `
+      <span><i style="background:${p.cor}"></i>${p.icone} ${esc(p.nome)} — <b>${dinheiro(p.valor)}</b>${p.obs ? ' <small>(' + p.obs + ')</small>' : ''}</span>`).join('')}
+    </div>`;
+}
 
 /* =========================================================================
    PAINEL
@@ -202,7 +325,7 @@ telas.painel = async () => {
   const pDia = d.dia.meta ? (d.dia.realizado / d.dia.meta) * 100 : 0;
   const pMes = d.mes_atual.meta ? (d.mes_atual.realizado / d.mes_atual.meta) * 100 : 0;
   const pAno = d.ano_atual.meta ? (d.ano_atual.realizado / d.ano_atual.meta) * 100 : 0;
-  const maxSerie = Math.max(...d.serie.map(s => Math.max(s.realizado, s.meta)), 1);
+  const com = d.comissoes || { pendente: 0, recebida: 0, total: 0, qtd_pendente: 0, qtd_recebida: 0 };
 
   acoes(`
     <select id="f-ano" style="width:auto">${[...new Set([...d.historico_anos.map(h => h.ano), ano, agora.getFullYear()])].sort((a, b) => b - a)
@@ -212,70 +335,64 @@ telas.painel = async () => {
       ${estado.representadas.map(r => `<option value="${r.id}" ${String(r.id) === rep ? 'selected' : ''}>${esc(r.nome)}</option>`).join('')}</select>
     <a class="btn btn-primario" href="#/pedido/novo">+ Pedido</a>`);
 
+  const repsAno = [...d.por_representada].filter(r => r.realizado_ano > 0).sort((a, b) => b.realizado_ano - a.realizado_ano);
+
   pintar(`
-  <div class="kpis">
-    <div class="kpi"><div class="rot">Hoje — ${dataBR(d.dia.data)}</div>
+  <div class="kpis k6">
+    <div class="kpi faixa-azul"><div class="rot">Hoje — ${dataBR(d.dia.data)}</div>
       <div class="val">${dinheiro(d.dia.realizado)}</div>
       <div class="obs">Meta diária ${dinheiro(d.dia.meta)} • ${d.dia.qtd} pedido(s)</div>
       <div class="barra ${barraCor(pDia)}"><span style="width:${Math.min(100, pDia)}%"></span></div></div>
 
-    <div class="kpi"><div class="rot">${MES[mes - 1]} / ${ano}</div>
+    <div class="kpi faixa-azul"><div class="rot">${MES[mes - 1]} / ${ano}</div>
       <div class="val">${dinheiro(d.mes_atual.realizado)}</div>
       <div class="obs">Meta ${dinheiro(d.mes_atual.meta)} • ${pct(pMes)} atingido</div>
       <div class="barra ${barraCor(pMes)}"><span style="width:${Math.min(100, pMes)}%"></span></div></div>
 
-    <div class="kpi"><div class="rot">Ano ${ano}</div>
+    <div class="kpi faixa-azul"><div class="rot">Ano ${ano}</div>
       <div class="val">${dinheiro(d.ano_atual.realizado)}</div>
       <div class="obs">Meta ${dinheiro(d.ano_atual.meta)} • falta ${dinheiro(d.ano_atual.falta)}</div>
       <div class="barra ${barraCor(pAno)}"><span style="width:${Math.min(100, pAno)}%"></span></div></div>
 
-    <div class="kpi"><div class="rot">Projeção do mês</div>
+    <div class="kpi faixa-laranja"><div class="rot">Projeção do mês</div>
       <div class="val">${dinheiro(d.mes_atual.projecao)}</div>
       <div class="obs">Média/dia ${dinheiro(d.mes_atual.media_dia)} • falta ${dinheiro(d.mes_atual.falta)}</div></div>
 
-    <div class="kpi"><div class="rot">Ticket médio (mês)</div>
+    <div class="kpi faixa-verde"><div class="rot">Ticket médio (mês)</div>
       <div class="val">${dinheiro(d.mes_atual.ticket)}</div>
       <div class="obs">${d.mes_atual.qtd} pedidos • ${d.mes_atual.clientes} clientes</div></div>
 
-    <div class="kpi"><div class="rot">Comissão estimada (mês)</div>
-      <div class="val">${dinheiro(d.mes_atual.comissao)}</div>
-      <div class="obs">conforme % de cada representada</div></div>
+    <div class="kpi faixa-roxa"><div class="rot">Comissão a receber</div>
+      <div class="val">${dinheiro(com.pendente)}</div>
+      <div class="obs">${com.qtd_pendente} pedido(s) • <a href="#/comissoes">ver comissões</a></div></div>
   </div>
 
-  <div class="grade g2" style="gap:16px">
-    <div class="cartao"><div class="cartao-tit">Realizado x Meta — ${ano}</div>
-      <div class="cartao-corpo">
-        <div class="grafico">${d.serie.map(s => `
-          <div class="col" title="${s.nome}: ${dinheiro(s.realizado)} de ${dinheiro(s.meta)}">
-            <div class="barras">
-              <div class="b meta" style="height:${(s.meta / maxSerie) * 100}%"></div>
-              <div class="b" style="height:${(s.realizado / maxSerie) * 100}%"></div>
-            </div><div class="rot">${s.nome}</div></div>`).join('')}</div>
-        <div class="legenda"><span><i style="background:#1d4e89"></i>Realizado</span><span><i style="background:#d7dee7"></i>Meta</span></div>
-      </div></div>
+  <div class="cartao"><div class="cartao-tit">Realizado x Meta — ${ano}</div>
+    <div class="cartao-corpo">${graficoColunas(d.serie, ano)}</div></div>
 
-    <div class="cartao"><div class="cartao-tit">Comparativo por ano</div>
-      <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
-        <thead><tr><th>Ano</th><th class="dir">Realizado</th><th class="dir">Meta</th><th class="dir">%</th><th class="dir">Var. ano anterior</th></tr></thead>
-        <tbody>${d.historico_anos.length ? d.historico_anos.map((h, i) => {
-          const ant = d.historico_anos[i - 1];
-          const v = ant && ant.realizado ? ((h.realizado - ant.realizado) / ant.realizado) * 100 : null;
-          const p = h.meta ? (h.realizado / h.meta) * 100 : 0;
-          return `<tr><td><b>${h.ano}</b></td><td class="dir mono">${dinheiro(h.realizado)}</td>
-            <td class="dir mono">${h.meta ? dinheiro(h.meta) : '-'}</td>
-            <td class="dir">${h.meta ? `<span class="etq ${p >= 100 ? 'etq-verde' : p >= 70 ? 'etq-laranja' : 'etq-vermelha'}">${pct(p)}</span>` : '-'}</td>
-            <td class="dir">${v === null ? '-' : `<span class="${v >= 0 ? 'pos' : 'neg'}">${v >= 0 ? '+' : ''}${pct(v)}</span>`}</td></tr>`;
-        }).join('') : '<tr><td colspan="5" class="vazio">Cadastre o histórico dos anos anteriores em <b>Histórico</b>.</td></tr>'}</tbody>
-      </table></div></div></div>
+  <div class="grade g2" style="gap:16px">
+    <div class="cartao"><div class="cartao-tit">Quem mais vendeu em ${ano}</div>
+      <div class="cartao-corpo">${graficoBarras(repsAno.map(r => ({ nome: r.nome, valor: r.realizado_ano })))}</div></div>
+
+    <div class="cartao"><div class="cartao-tit">Comissões de ${ano}</div>
+      <div class="cartao-corpo">
+        ${graficoProporcao([
+          { nome: 'Recebida', valor: com.recebida, cor: COR_OK, icone: '✔', obs: com.qtd_recebida + ' pedido(s)' },
+          { nome: 'A receber', valor: com.pendente, cor: COR_ESPERA, icone: '⏳', obs: com.qtd_pendente + ' pedido(s)' },
+        ])}
+        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+          <a class="btn btn-peq" href="#/comissoes">Abrir tela de comissões</a>
+        </div>
+      </div></div>
   </div>
 
   <div class="cartao"><div class="cartao-tit">Desempenho por representada — ${MES[mes - 1]}/${ano}</div>
     <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
       <thead><tr><th>Representada</th><th class="dir">Realizado mês</th><th class="dir">Meta mês</th><th style="width:130px">Atingido</th>
         <th class="dir">Realizado ano</th><th class="dir">Meta ano</th><th class="cen">Pedidos</th></tr></thead>
-      <tbody>${d.por_representada.length ? d.por_representada.map(r => {
+      <tbody>${d.por_representada.length ? d.por_representada.map((r, i) => {
         const p = r.meta_mes ? (r.realizado_mes / r.meta_mes) * 100 : 0;
-        return `<tr><td><b>${esc(r.nome)}</b></td>
+        return `<tr><td><span class="ponto" style="background:${CORES[i % CORES.length]}"></span><b>${esc(r.nome)}</b></td>
           <td class="dir mono">${dinheiro(r.realizado_mes)}</td><td class="dir mono">${dinheiro(r.meta_mes)}</td>
           <td><div class="barra ${barraCor(p)}"><span style="width:${Math.min(100, p)}%"></span></div>
               <small style="color:var(--suave)">${pct(p)}</small></td>
@@ -285,46 +402,153 @@ telas.painel = async () => {
     </table></div></div></div>
 
   <div class="grade g2" style="gap:16px">
-    <div class="cartao"><div class="cartao-tit">Cotações do ano</div><div class="cartao-corpo">
-      <div class="kpis" style="margin:0">
-        <div class="kpi" style="box-shadow:none"><div class="rot">Em aberto</div><div class="val">${d.cotacoes.abertas}</div>
-          <div class="obs">${dinheiro(d.cotacoes.valor_abertas)}</div></div>
-        <div class="kpi" style="box-shadow:none"><div class="rot">Ganhas</div><div class="val">${d.cotacoes.ganhas}</div>
-          <div class="obs">${dinheiro(d.cotacoes.valor_ganhas)}</div></div>
-        <div class="kpi" style="box-shadow:none"><div class="rot">Conversão</div><div class="val">${pct(d.cotacoes.conversao)}</div>
-          <div class="obs">${d.cotacoes.perdidas} perdida(s)</div></div>
-      </div></div></div>
+    <div class="cartao"><div class="cartao-tit">Comparativo por ano</div>
+      <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
+        <thead><tr><th>Ano</th><th class="dir">Realizado</th><th class="dir">Meta</th><th class="dir">%</th><th class="dir">Var.</th></tr></thead>
+        <tbody>${d.historico_anos.length ? d.historico_anos.map((h, i) => {
+          const ant = d.historico_anos[i - 1];
+          const v = ant && ant.realizado ? ((h.realizado - ant.realizado) / ant.realizado) * 100 : null;
+          const p = h.meta ? (h.realizado / h.meta) * 100 : 0;
+          return `<tr><td><b>${h.ano}</b></td><td class="dir mono">${dinheiro(h.realizado)}</td>
+            <td class="dir mono">${h.meta ? dinheiro(h.meta) : '-'}</td>
+            <td class="dir">${h.meta ? `<span class="etq ${p >= 100 ? 'etq-verde' : p >= 70 ? 'etq-laranja' : 'etq-vermelha'}">${pct(p)}</span>` : '-'}</td>
+            <td class="dir">${v === null ? '-' : `<span class="${v >= 0 ? 'pos' : 'neg'}">${v >= 0 ? '+' : ''}${pct(v)}</span>`}</td></tr>`;
+        }).join('') : '<tr><td colspan="5" class="vazio">Cadastre o histórico em <b>Histórico</b>.</td></tr>'}</tbody>
+      </table></div></div></div>
 
-    <div class="cartao"><div class="cartao-tit">Últimos lançamentos</div>
-      <div class="cartao-corpo sem-pad"><table><tbody>
-        ${d.ultimos_pedidos.length ? d.ultimos_pedidos.map(p => `<tr style="cursor:pointer" onclick="location.hash='#/pedido/${p.id}'">
-          <td><b>${p.numero}</b><br><small style="color:var(--suave)">${esc(p.cliente_nome)}</small></td>
-          <td>${etq(p.status)}<br><small style="color:var(--suave)">${dataBR(p.data_emissao)}</small></td>
-          <td class="dir mono"><b>${dinheiro(p.total)}</b></td></tr>`).join('')
-          : '<tr><td class="vazio">Nenhum lançamento ainda.</td></tr>'}
-      </tbody></table></div></div>
+    <div class="cartao"><div class="cartao-tit">Cotações do ano</div><div class="cartao-corpo">
+      ${graficoProporcao([
+        { nome: 'Ganhas', valor: d.cotacoes.valor_ganhas, cor: COR_OK, icone: '✔', obs: d.cotacoes.ganhas + ' cotação(ões)' },
+        { nome: 'Em aberto', valor: d.cotacoes.valor_abertas, cor: CORES[0], icone: '◔', obs: d.cotacoes.abertas + ' cotação(ões)' },
+      ])}
+      <div style="margin-top:12px;color:var(--suave);font-size:12.5px">
+        Taxa de conversão: <b style="color:var(--texto)">${pct(d.cotacoes.conversao)}</b> • ${d.cotacoes.perdidas} perdida(s)
+      </div>
+    </div></div>
   </div>
 
   <div class="grade g2" style="gap:16px">
     <div class="cartao"><div class="cartao-tit">Top 10 clientes — ${ano}</div>
-      <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
-        <thead><tr><th>Cliente</th><th class="cen">Pedidos</th><th class="dir">Total</th></tr></thead>
-        <tbody>${d.top_clientes.length ? d.top_clientes.map(c => `<tr><td>${esc(c.razao_social)}
-          <br><small style="color:var(--suave)">${esc([c.cidade, c.uf].filter(Boolean).join('/'))}</small></td>
-          <td class="cen">${c.qtd}</td><td class="dir mono">${dinheiro(c.total)}</td></tr>`).join('')
-          : '<tr><td colspan="3" class="vazio">Sem vendas no período.</td></tr>'}</tbody></table></div></div></div>
+      <div class="cartao-corpo">${graficoBarras(d.top_clientes.map(c => ({ nome: c.razao_social, valor: c.total })))}</div></div>
 
     <div class="cartao"><div class="cartao-tit">Top 10 produtos — ${ano}</div>
-      <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
-        <thead><tr><th>Produto</th><th class="dir">Qtd</th><th class="dir">Total</th></tr></thead>
-        <tbody>${d.top_produtos.length ? d.top_produtos.map(p => `<tr><td>${esc(p.descricao)}
-          ${p.codigo ? `<br><small style="color:var(--suave)">${esc(p.codigo)}</small>` : ''}</td>
-          <td class="dir mono">${numero(p.qtd)}</td><td class="dir mono">${dinheiro(p.total)}</td></tr>`).join('')
-          : '<tr><td colspan="3" class="vazio">Sem vendas no período.</td></tr>'}</tbody></table></div></div></div>
-  </div>`);
+      <div class="cartao-corpo">${graficoBarras(d.top_produtos.map(p => ({ nome: p.descricao, valor: p.total })))}</div></div>
+  </div>
 
+  <div class="cartao"><div class="cartao-tit">Últimos lançamentos</div>
+    <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
+      <thead><tr><th>Número</th><th>Cliente</th><th>Representada</th><th class="cen">Situação</th><th>Data</th><th class="dir">Total</th></tr></thead>
+      <tbody>${d.ultimos_pedidos.length ? d.ultimos_pedidos.map(p => `
+        <tr style="cursor:pointer" onclick="location.hash='#/${p.tipo === 'cotacao' ? 'cotacao' : 'pedido'}/${p.id}'">
+          <td><b>${p.numero}</b></td><td>${esc(p.cliente_nome)}</td>
+          <td><small>${esc(p.representada_nome)}</small></td>
+          <td class="cen">${etq(p.status)}</td><td>${dataBR(p.data_emissao)}</td>
+          <td class="dir mono"><b>${dinheiro(p.total)}</b></td></tr>`).join('')
+        : '<tr><td colspan="6" class="vazio">Nenhum lançamento ainda.</td></tr>'}</tbody>
+    </table></div></div></div>`);
+
+  ligarDicas();
   const aplicar = () => { location.hash = `#/painel?ano=${$('#f-ano').value}&mes=${$('#f-mes').value}&rep=${$('#f-rep').value}`; rotear(); };
   ['#f-ano', '#f-mes', '#f-rep'].forEach(s => $(s).addEventListener('change', aplicar));
+};
+
+/* =========================================================================
+   COMISSÕES
+   ========================================================================= */
+telas.comissoes = async () => {
+  titulo('Comissões');
+  const agora = new Date();
+  const q = new URLSearchParams(location.hash.split('?')[1] || '');
+  const f2 = (x) => String(x).padStart(2, '0');
+  const ano = Number(q.get('ano') || agora.getFullYear());
+  const de = q.get('de') || `${ano}-01-01`;
+  const ate = q.get('ate') || `${ano}-12-31`;
+  const rep = q.get('rep') || '';
+  const situacao = q.get('sit') || '';
+
+  const par = new URLSearchParams({ de, ate });
+  if (rep) par.set('representada_id', rep);
+  if (situacao) par.set('status', situacao);
+  const d = await get('/comissoes?' + par);
+  const r = d.resumo;
+
+  acoes(`<button class="btn btn-verde" id="btn-marcar">✔ Marcar selecionadas como recebidas</button>
+         <button class="btn" id="btn-desmarcar">Voltar para pendente</button>`);
+
+  pintar(`
+  <div class="filtros nao-imprimir">
+    <label class="campo">De<input type="date" id="f-de" value="${de}"></label>
+    <label class="campo">Até<input type="date" id="f-ate" value="${ate}"></label>
+    <label class="campo">Representada<select id="f-rep"><option value="">Todas</option>
+      ${estado.representadas.map(x => `<option value="${x.id}" ${String(x.id) === rep ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select></label>
+    <label class="campo">Situação<select id="f-sit">
+      <option value="">Todas</option>
+      <option value="pendente" ${situacao === 'pendente' ? 'selected' : ''}>A receber</option>
+      <option value="recebida" ${situacao === 'recebida' ? 'selected' : ''}>Recebidas</option></select></label>
+    <button class="btn btn-primario" id="btn-filtrar">Filtrar</button>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi faixa-amarela"><div class="rot">A receber</div><div class="val">${dinheiro(r.pendente)}</div>
+      <div class="obs">${r.qtd_pendente} pedido(s)</div></div>
+    <div class="kpi faixa-verde"><div class="rot">Já recebida</div><div class="val">${dinheiro(r.recebida)}</div>
+      <div class="obs">${r.qtd_recebida} pedido(s)</div></div>
+    <div class="kpi faixa-azul"><div class="rot">Total do período</div><div class="val">${dinheiro(r.total)}</div>
+      <div class="obs">${r.qtd_total} pedido(s)</div></div>
+  </div>
+
+  <div class="cartao"><div class="cartao-corpo">
+    ${graficoProporcao([
+      { nome: 'Recebida', valor: r.recebida, cor: COR_OK, icone: '✔', obs: r.qtd_recebida + ' pedido(s)' },
+      { nome: 'A receber', valor: r.pendente, cor: COR_ESPERA, icone: '⏳', obs: r.qtd_pendente + ' pedido(s)' },
+    ])}
+  </div></div>
+
+  <div class="cartao"><div class="cartao-tit">Pedidos do período
+      <span style="font-weight:400;color:var(--suave);font-size:12.5px">${d.lista.length} registro(s)</span></div>
+    <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
+      <thead><tr>
+        <th style="width:36px" class="cen"><input type="checkbox" id="sel-todos" style="width:auto"></th>
+        <th>Pedido</th><th>Cliente</th><th>Representada</th><th>Emissão</th>
+        <th class="dir">Total</th><th class="dir">%</th><th class="dir">Comissão</th><th class="cen">Situação</th></tr></thead>
+      <tbody>${d.lista.length ? d.lista.map(p => `
+        <tr class="${p.comissao_status === 'recebida' ? 'linha-recebida' : ''}">
+          <td class="cen"><input type="checkbox" class="sel" value="${p.id}" style="width:auto"></td>
+          <td><a href="#/pedido/${p.id}"><b>${p.numero}</b></a></td>
+          <td>${esc(p.cliente_nome)}</td>
+          <td><small>${esc(p.representada_nome)}</small></td>
+          <td>${dataBR(p.data_emissao)}</td>
+          <td class="dir mono">${dinheiro(p.total)}</td>
+          <td class="dir">${p.comissao_pct != null ? pct(p.comissao_pct) : '-'}</td>
+          <td class="dir mono"><b>${dinheiro(p.comissao_valor)}</b></td>
+          <td class="cen">${p.comissao_status === 'recebida'
+            ? `<span class="etq etq-verde">✔ Recebida</span>${p.comissao_recebida_em ? `<br><small style="color:var(--suave)">${dataBR(p.comissao_recebida_em)}</small>` : ''}`
+            : '<span class="etq etq-laranja">⏳ A receber</span>'}</td></tr>`).join('')
+        : '<tr><td colspan="9" class="vazio"><b>Nenhum pedido no período</b>Ajuste os filtros acima.</td></tr>'}</tbody>
+    </table></div></div></div>
+
+  <div class="info-linha">A comissão de cada pedido usa a <b>% gravada no próprio pedido</b>. Se você negociou
+    diferente em algum, altere o percentual dentro do pedido que o valor se ajusta aqui.</div>`);
+
+  ligarDicas();
+  const filtrar = () => {
+    const p = new URLSearchParams({ de: $('#f-de').value, ate: $('#f-ate').value, rep: $('#f-rep').value, sit: $('#f-sit').value });
+    location.hash = '#/comissoes?' + p; rotear();
+  };
+  $('#btn-filtrar').addEventListener('click', filtrar);
+  ['#f-rep', '#f-sit'].forEach(x => $(x).addEventListener('change', filtrar));
+  $('#sel-todos').addEventListener('change', e => $$('.sel').forEach(c => c.checked = e.target.checked));
+
+  const marcar = async (status) => {
+    const ids = $$('.sel').filter(c => c.checked).map(c => Number(c.value));
+    if (!ids.length) return erro('Selecione ao menos um pedido na lista.');
+    const txt = status === 'recebida' ? 'marcar como RECEBIDAS' : 'voltar para PENDENTE';
+    if (!confirm(`Confirma ${txt} ${ids.length} comissão(ões)?`)) return;
+    try { await api('POST', '/comissoes/marcar', { ids, status }); ok('Comissões atualizadas.'); rotear(); }
+    catch (e) { erro(e); }
+  };
+  $('#btn-marcar').addEventListener('click', () => marcar('recebida'));
+  $('#btn-desmarcar').addEventListener('click', () => marcar('pendente'));
 };
 
 /* =========================================================================
@@ -703,6 +927,10 @@ function editor(tipoPadrao) {
             ${['CIF', 'FOB', 'Retira', 'Terceiros'].map(t => `<option ${doc.tipo_frete === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
           <label class="campo">Transportadora<input name="transportadora" value="${esc(doc.transportadora || '')}" ${bloqueado ? 'readonly' : ''}></label>
         </div>
+        <label class="campo">Prazo negociado neste ${eCot ? 'orçamento' : 'pedido'} (opcional)
+          <input name="condicao_texto" id="in-cond-texto" value="${esc(doc.condicao_texto || '')}"
+            placeholder="Ex.: 30/60/90 dias — boleto, primeira em 15/03" ${bloqueado ? 'readonly' : ''}>
+          <small class="ajuda">Se preencher, este texto substitui o prazo da lista acima no PDF e no WhatsApp.</small></label>
         <div id="info-cliente"></div>
       </div></div>
 
@@ -724,9 +952,14 @@ function editor(tipoPadrao) {
           <textarea name="observacoes" placeholder="Instruções de entrega, negociação, prazo especial…" ${bloqueado ? 'readonly' : ''}>${esc(doc.observacoes || '')}</textarea>
         </div></div>
         <div class="cartao"><div class="cartao-tit">Totais</div><div class="cartao-corpo">
-          <div class="grade g2">
+          <div class="grade g3">
             <label class="campo">Desconto geral (%)<input type="number" step="0.01" name="desconto_pct" id="in-desc" value="${n(doc.desconto_pct)}" ${bloqueado ? 'readonly' : ''}></label>
             <label class="campo">Frete (R$)<input type="number" step="0.01" name="frete" id="in-frete" value="${n(doc.frete)}" ${bloqueado ? 'readonly' : ''}></label>
+            <label class="campo">Comissão (%)
+              <input type="number" step="0.01" min="0" id="in-comissao"
+                value="${doc.comissao_pct === null || doc.comissao_pct === undefined ? '' : doc.comissao_pct}"
+                placeholder="da representada" ${bloqueado ? 'readonly' : ''}>
+              <small class="ajuda">Deixe vazio para usar a % da representada.</small></label>
           </div>
           <table style="font-size:13.5px"><tbody id="corpo-totais"></tbody></table>
         </div></div>
@@ -805,7 +1038,7 @@ function editor(tipoPadrao) {
       const r = e.target.dataset.remover;
       if (r !== undefined) { itens.splice(Number(r), 1); desenharItens(); }
     });
-    ['#in-desc', '#in-frete'].forEach(s => $(s).addEventListener('input', totais));
+    ['#in-desc', '#in-frete', '#in-comissao'].forEach(s => $(s).addEventListener('input', totais));
 
     function totais() {
       const bruto = itens.reduce((s, it) => s + n(it.quantidade) * n(it.preco_unit) * (1 - n(it.desconto_pct) / 100), 0);
@@ -815,6 +1048,10 @@ function editor(tipoPadrao) {
       const total = base + ipi + frete;
       const rep = estado.representadas.find(r => r.id === Number($('#sel-rep').value));
       const pecas = itens.reduce((s, it) => s + n(it.quantidade), 0);
+      // % do pedido quando preenchida; senão a da representada
+      const pcTxt = ($('#in-comissao')?.value || '').trim();
+      const comPct = pcTxt === '' ? n(rep?.comissao_pct) : n(pcTxt);
+      const comProprio = pcTxt !== '' && n(pcTxt) !== n(rep?.comissao_pct);
       $('#corpo-totais').innerHTML = `
         <tr><td>Subtotal</td><td class="dir mono">${dinheiro(bruto)}</td></tr>
         ${dp ? `<tr><td>Desconto ${pct(dp)}</td><td class="dir mono neg">- ${dinheiro(bruto * dp / 100)}</td></tr>` : ''}
@@ -824,7 +1061,7 @@ function editor(tipoPadrao) {
             <td class="dir mono" style="border-top:2px solid var(--borda);font-size:19px"><b>${dinheiro(total)}</b></td></tr>
         <tr><td colspan="2" style="color:var(--suave);font-size:12px;border:0">
           ${itens.length} item(ns) • ${numero(pecas)} unidade(s)
-          ${rep && rep.comissao_pct ? ` • comissão ${pct(rep.comissao_pct)} = ${dinheiro(base * rep.comissao_pct / 100)}` : ''}
+          ${comPct ? ` • comissão ${pct(comPct)} = ${dinheiro(base * comPct / 100)}${comProprio ? ' <b>(deste pedido)</b>' : ''}` : ''}
           ${rep && rep.pedido_minimo ? ` • mínimo ${dinheiro(rep.pedido_minimo)}` : ''}</td></tr>`;
     }
 
@@ -870,6 +1107,9 @@ function editor(tipoPadrao) {
     $('#btn-salvar')?.addEventListener('click', async () => {
       const f = dadosForm($('#form-pedido'));
       const corpo = { ...f, tipo: doc.tipo, itens };
+      // vazio = herda a % da representada (null), e não zero
+      const pc = $('#in-comissao').value.trim();
+      corpo.comissao_pct = pc === '' ? null : Number(pc);
       try {
         const salvo = id ? await api('PUT', '/pedidos/' + id, corpo) : await api('POST', '/pedidos', corpo);
         ok(`${eCot ? 'Cotação' : 'Pedido'} ${salvo.numero} salvo!`);
@@ -1252,9 +1492,10 @@ telas.representadas = async () => {
   const carregar = async () => {
     estado.representadas = await get('/representadas');
     pintar(`<div class="cartao"><div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
-      <thead><tr><th>Representada</th><th>CNPJ</th><th>Contato</th><th class="dir">Comissão</th>
+      <thead><tr><th style="width:64px">Logo</th><th>Representada</th><th>CNPJ</th><th>Contato</th><th class="dir">Comissão</th>
         <th class="dir">Pedido mínimo</th><th class="cen">Produtos</th><th class="cen">Tabelas</th><th></th></tr></thead>
       <tbody>${estado.representadas.length ? estado.representadas.map(r => `<tr>
+        <td>${logoRep(r)}</td>
         <td><b>${esc(r.nome)}</b>${!r.ativo ? ' <span class="etq etq-cinza">inativa</span>' : ''}</td>
         <td class="mono">${cnpjFmt(r.cnpj)}</td>
         <td><small>${esc(r.contato || '')}${r.telefone ? '<br>' + esc(r.telefone) : ''}</small></td>
@@ -1264,7 +1505,7 @@ telas.representadas = async () => {
           <button class="btn btn-peq" data-tabelas="${r.id}">Tabelas</button>
           <button class="btn btn-peq" data-prazos="${r.id}">Prazos</button>
           <button class="btn btn-peq" data-editar="${r.id}">Editar</button>` : ''}</div></td></tr>`).join('')
-        : `<tr><td colspan="8" class="vazio"><b>Nenhuma representada</b>Comece cadastrando as empresas que você representa.</td></tr>`}
+        : `<tr><td colspan="9" class="vazio"><b>Nenhuma representada</b>Comece cadastrando as empresas que você representa.</td></tr>`}
       </tbody></table></div></div></div>`);
     $$('[data-editar]').forEach(b => b.addEventListener('click', () => formRepresentada(estado.representadas.find(x => x.id === Number(b.dataset.editar)), carregar)));
     $$('[data-tabelas]').forEach(b => b.addEventListener('click', () => gerenciarTabelas(Number(b.dataset.tabelas), carregar)));
@@ -1293,11 +1534,45 @@ function formRepresentada(r, aoSalvar) {
       <label class="campo">Ativa<select name="ativo"><option value="1" ${r.ativo ? 'selected' : ''}>Sim</option><option value="0" ${!r.ativo ? 'selected' : ''}>Não</option></select></label>
     </div>
     <label class="campo">Observações<textarea name="observacoes">${esc(r.observacoes || '')}</textarea></label>
+    ${r.id ? `<p class="sub-tit">Logomarca da representada</p>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+      <div id="previa-logo" class="caixa-logo"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <label class="btn btn-primario" style="cursor:pointer">🖼️ Escolher logomarca
+          <input type="file" id="arq-logo" accept="image/*" style="display:none"></label>
+        ${r.logo ? '<button type="button" class="btn btn-perigo" id="btn-tirar-logo">Remover</button>' : ''}
+        <span style="color:var(--suave);font-size:12px;align-self:center;max-width:230px">
+          Aparece no PDF do pedido e na lista de representadas.</span>
+      </div>
+    </div>` : '<div class="info-linha">Salve a representada primeiro para poder enviar a logomarca.</div>'}
     <div class="modal-acoes">
       ${r.id ? '<button type="button" class="btn btn-perigo" id="btn-excluir">Excluir</button>' : ''}
       <button type="button" class="btn" onclick="window.__fechar()">Cancelar</button>
       <button type="submit" class="btn btn-primario">Salvar</button></div>
   </form>`);
+  if (r.id) {
+    const desenharLogo = () => {
+      $('#previa-logo').innerHTML = r.logo
+        ? `<img src="/api/representadas/${r.id}/logo?v=${Date.now()}" alt="">`
+        : '<span>sem logo</span>';
+    };
+    desenharLogo();
+    $('#arq-logo').addEventListener('change', async e => {
+      const f = e.target.files[0];
+      if (!f) return;
+      try {
+        aviso('Preparando a imagem…');
+        const dados = await reduzirImagem(f, 600, 0.9);
+        const x = await api('POST', `/representadas/${r.id}/logo`, { dados });
+        r.logo = x.logo; desenharLogo(); ok('Logomarca salva!'); aoSalvar();
+      } catch (x) { erro(x); }
+    });
+    $('#btn-tirar-logo')?.addEventListener('click', async () => {
+      if (!confirm('Remover a logomarca desta representada?')) return;
+      try { await api('DELETE', `/representadas/${r.id}/logo`); r.logo = ''; desenharLogo(); ok('Logomarca removida.'); aoSalvar(); }
+      catch (x) { erro(x); }
+    });
+  }
   $('#btn-excluir')?.addEventListener('click', async () => {
     if (!confirm('Excluir a representada apaga também seus produtos e tabelas. Continuar?')) return;
     try { await api('DELETE', '/representadas/' + r.id); fecharModal(); ok('Excluída.'); aoSalvar(); } catch (e) { erro(e); }
@@ -1406,7 +1681,7 @@ telas.metas = async () => {
       <tbody>
         ${g.linhas.map(l => `<tr data-rep="${l.representada_id}">
           <td><b>${esc(l.nome)}</b></td>
-          ${l.meses.map(m => `<td><input type="number" step="0.01" class="dir meta-in" data-mes="${m.mes}" value="${m.meta || ''}" placeholder="0" style="min-width:92px">
+          ${l.meses.map(m => `<td><input type="text" inputmode="decimal" class="dir meta-in" data-mes="${m.mes}" value="${moedaBR(m.meta || '')}" placeholder="0,00" style="min-width:104px">
             <small style="color:var(--suave);display:block;text-align:right">real ${curto(m.realizado)}</small></td>`).join('')}
           <td class="dir mono"><b class="tot-linha">${dinheiro(l.meses.reduce((s, m) => s + m.meta, 0))}</b></td></tr>`).join('')}
         <tr style="background:#fafbfc"><td><b>Total</b></td>
@@ -1422,16 +1697,17 @@ telas.metas = async () => {
   const recalcular = () => {
     let geral = 0;
     $$('#tab-metas tbody tr[data-rep]').forEach(tr => {
-      const s = $$('.meta-in', tr).reduce((a, i) => a + n(i.value), 0);
+      const s = $$('.meta-in', tr).reduce((a, i) => a + numBR(i.value), 0);
       $('.tot-linha', tr).textContent = dinheiro(s); geral += s;
     });
     $('#tot-geral').textContent = dinheiro(geral);
     $$('.tot-mes').forEach((el, i) => {
-      const s = $$(`#tab-metas tbody tr[data-rep] .meta-in[data-mes="${i + 1}"]`).reduce((a, x) => a + n(x.value), 0);
+      const s = $$(`#tab-metas tbody tr[data-rep] .meta-in[data-mes="${i + 1}"]`).reduce((a, x) => a + numBR(x.value), 0);
       el.textContent = curto(s);
     });
   };
   $('#tab-metas').addEventListener('input', recalcular);
+  ligarCamposBR('.meta-in', recalcular);
   $('#f-ano').addEventListener('change', () => { location.hash = '#/metas?ano=' + $('#f-ano').value; rotear(); });
 
   $('#btn-distribuir')?.addEventListener('click', () => {
@@ -1439,7 +1715,7 @@ telas.metas = async () => {
       <div class="grade g2">
         <label class="campo">Representada<select id="d-rep">
           ${g.linhas.map(l => `<option value="${l.representada_id}">${esc(l.nome)}</option>`).join('')}</select></label>
-        <label class="campo">Meta do ano (R$)<input type="number" step="0.01" id="d-valor" placeholder="600000"></label>
+        <label class="campo">Meta do ano (R$)<input type="text" inputmode="decimal" id="d-valor" placeholder="600.000,00"></label>
       </div>
       <label class="campo">Como distribuir<select id="d-modo">
         <option value="igual">Igual em todos os meses</option>
@@ -1448,7 +1724,7 @@ telas.metas = async () => {
       <div class="modal-acoes"><button class="btn" onclick="window.__fechar()">Cancelar</button>
         <button class="btn btn-primario" id="d-ok">Aplicar</button></div>`);
     $('#d-ok').addEventListener('click', async () => {
-      const rep = Number($('#d-rep').value), valor = n($('#d-valor').value), modo = $('#d-modo').value;
+      const rep = Number($('#d-rep').value), valor = numBR($('#d-valor').value), modo = $('#d-modo').value;
       if (!valor) return erro('Informe o valor da meta anual.');
       let pesos = Array(12).fill(1);
       if (modo === 'crescente') pesos = pesos.map((_, i) => Math.pow(1.02, i));
@@ -1460,7 +1736,7 @@ telas.metas = async () => {
       }
       const soma = pesos.reduce((a, b) => a + b, 0);
       const tr = $(`#tab-metas tr[data-rep="${rep}"]`);
-      $$('.meta-in', tr).forEach((inp, i) => { inp.value = ((valor * pesos[i]) / soma).toFixed(2); });
+      $$('.meta-in', tr).forEach((inp, i) => { inp.value = moedaBR((valor * pesos[i]) / soma); });
       recalcular(); fecharModal(); ok('Meta distribuída — confira e clique em Salvar metas.');
     });
   });
@@ -1472,7 +1748,7 @@ telas.metas = async () => {
       const rep = Number(tr.dataset.rep);
       $$('.meta-in', tr).forEach(inp => itens.push({
         ano, mes: Number(inp.dataset.mes), representada_id: rep,
-        valor: n(inp.value), dias_uteis: dias[inp.dataset.mes],
+        valor: numBR(inp.value), dias_uteis: dias[inp.dataset.mes],
       }));
     });
     try { await api('POST', '/metas', { itens }); ok('Metas salvas!'); rotear(); } catch (e) { erro(e); }
@@ -1499,22 +1775,23 @@ telas.historico = async () => {
       <tbody>
         ${[{ id: 0, nome: 'Geral (sem separar)' }, ...estado.representadas].map(r => `<tr data-rep="${r.id}">
           <td><b>${esc(r.nome)}</b></td>
-          ${MES.map((_, i) => `<td><input type="number" step="0.01" class="hist-in dir" data-mes="${i + 1}"
-            value="${valor(r.id, i + 1, 'realizado')}" placeholder="0" style="min-width:92px"></td>`).join('')}
+          ${MES.map((_, i) => `<td><input type="text" inputmode="decimal" class="hist-in dir" data-mes="${i + 1}"
+            value="${moedaBR(valor(r.id, i + 1, 'realizado'))}" placeholder="0,00" style="min-width:104px"></td>`).join('')}
           <td class="dir mono"><b class="tot-linha">-</b></td></tr>`).join('')}
       </tbody></table></div></div></div>`);
 
   const recalc = () => $$('#tab-hist tr[data-rep]').forEach(tr => {
-    $('.tot-linha', tr).textContent = dinheiro($$('.hist-in', tr).reduce((a, i) => a + n(i.value), 0));
+    $('.tot-linha', tr).textContent = dinheiro($$('.hist-in', tr).reduce((a, i) => a + numBR(i.value), 0));
   });
   recalc();
   $('#tab-hist').addEventListener('input', recalc);
+  ligarCamposBR('.hist-in', recalc);
   $('#f-ano').addEventListener('change', () => { location.hash = '#/historico?ano=' + $('#f-ano').value; rotear(); });
   $('#btn-salvar')?.addEventListener('click', async () => {
     const itens = [];
     $$('#tab-hist tr[data-rep]').forEach(tr => {
       const rep = Number(tr.dataset.rep) || null;
-      $$('.hist-in', tr).forEach(i => { if (i.value !== '') itens.push({ ano, mes: Number(i.dataset.mes), representada_id: rep, realizado: n(i.value) }); });
+      $$('.hist-in', tr).forEach(i => { if (i.value.trim() !== '') itens.push({ ano, mes: Number(i.dataset.mes), representada_id: rep, realizado: numBR(i.value) }); });
     });
     if (!itens.length) return erro('Nada para salvar.');
     try { await api('POST', '/historico', { itens }); ok('Histórico salvo!'); } catch (e) { erro(e); }

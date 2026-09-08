@@ -139,6 +139,40 @@ module.exports = function (rota, ErroApi) {
           (SELECT COUNT(*) FROM tabelas_preco t WHERE t.representada_id = r.id AND t.ativo = 1) AS qtd_tabelas
         FROM representadas r ORDER BY r.ativo DESC, r.nome`).all() });
 
+  // ---- logo da representada
+  const PASTA_LOGOS = path.join(DATA_DIR, 'representadas');
+  fs.mkdirSync(PASTA_LOGOS, { recursive: true });
+
+  rota.get('/api/representadas/:id/logo', ({ params, res }) => {
+    const r = db.prepare('SELECT logo FROM representadas WHERE id = ?').get(Number(params.id));
+    const arq = r && r.logo ? path.join(PASTA_LOGOS, r.logo) : null;
+    if (!arq || !fs.existsSync(arq)) { res.writeHead(204); return res.end(); }
+    res.writeHead(200, { 'Content-Type': arq.endsWith('.png') ? 'image/png' : 'image/jpeg', 'Cache-Control': 'max-age=86400' });
+    res.end(fs.readFileSync(arq));
+  });
+
+  rota.post('/api/representadas/:id/logo', ({ params, corpo }) => {
+    const id = Number(params.id);
+    if (!db.prepare('SELECT id FROM representadas WHERE id = ?').get(id)) throw new ErroApi('Representada não encontrada.', 404);
+    const m = String(corpo.dados || '').match(/^data:image\/(png|jpe?g);base64,(.+)$/);
+    if (!m) throw new ErroApi('Envie uma imagem PNG ou JPG.');
+    const buf = Buffer.from(m[2], 'base64');
+    if (buf.length > 3 * 1024 * 1024) throw new ErroApi('Imagem muito grande (máximo 3 MB).');
+    const ext = m[1] === 'png' ? 'png' : 'jpg';
+    for (const e of ['png', 'jpg']) { const v = path.join(PASTA_LOGOS, `${id}.${e}`); if (fs.existsSync(v)) fs.unlinkSync(v); }
+    fs.writeFileSync(path.join(PASTA_LOGOS, `${id}.${ext}`), buf);
+    db.prepare('UPDATE representadas SET logo = ? WHERE id = ?').run(`${id}.${ext}`, id);
+    return { ok: true, logo: `${id}.${ext}` };
+  }, { admin: true });
+
+  rota.del('/api/representadas/:id/logo', ({ params }) => {
+    const id = Number(params.id);
+    const r = db.prepare('SELECT logo FROM representadas WHERE id = ?').get(id);
+    if (r && r.logo) { const a = path.join(PASTA_LOGOS, r.logo); if (fs.existsSync(a)) fs.unlinkSync(a); }
+    db.prepare("UPDATE representadas SET logo = '' WHERE id = ?").run(id);
+    return { ok: true };
+  }, { admin: true });
+
   // ---- tabelas de preço
   crud('tabelas', 'tabelas_preco', ['representada_id', 'nome', 'vigencia_inicio', 'vigencia_fim', 'padrao', 'ativo'], {
     admin: true,

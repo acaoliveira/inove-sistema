@@ -140,6 +140,8 @@ const SUAVE = [0.45, 0.45, 0.47];
  */
 function gerarPedidoPDF(d) {
   const { pedido, cliente, representada, itens, condicao, usuario, empresa } = d;
+  let logoRep = null;
+  if (d.logoRepresentada) { try { logoRep = lerImagem(d.logoRepresentada); } catch { logoRep = null; } }
   const doc = new Doc();
   const M = 36;
   const eCotacao = pedido.tipo === 'cotacao';
@@ -166,14 +168,22 @@ function gerarPedidoPDF(d) {
     doc.retangulo(M, 82, LARGURA - 2 * M, 2.4, CARVAO);
   };
 
-  const bloco = (y, rotulo, linhas) => {
+  const bloco = (y, rotulo, linhas, img) => {
     doc.retangulo(M, y, LARGURA - 2 * M, 14, CINZA);
     doc.texto(M + 6, y + 10, rotulo, { tam: 7.5, bold: true, cor: CARVAO });
+    // largura util do texto encolhe quando ha logo a direita
+    const espacoLogo = img ? 110 : 0;
     let yy = y + 26;
     for (const [rot, val] of linhas) {
       doc.texto(M + 6, yy, rot, { tam: 7.5, cor: SUAVE });
-      doc.texto(M + 78, yy, val || '-', { tam: 8.5, max: LARGURA - 2 * M - 90 });
+      doc.texto(M + 78, yy, val || '-', { tam: 8.5, max: LARGURA - 2 * M - 90 - espacoLogo });
       yy += 12.5;
+    }
+    if (img) {
+      const cx = 96, cy = Math.max(28, yy - (y + 20));
+      let w = cx, h = (img.altura / img.largura) * w;
+      if (h > cy) { h = cy; w = (img.largura / img.altura) * h; }
+      doc.imagem(img, LARGURA - M - 8 - w, y + 20 + (cy - h) / 2, w, h);
     }
     return yy + 4;
   };
@@ -185,7 +195,7 @@ function gerarPedidoPDF(d) {
     ['Empresa', representada.nome],
     ['CNPJ', formatarCNPJ(representada.cnpj)],
     ['Contato', [representada.contato, representada.telefone, representada.email].filter(Boolean).join('  •  ')],
-  ]);
+  ], logoRep);
 
   const endereco = [cliente.logradouro, cliente.numero, cliente.complemento].filter(Boolean).join(', ');
   const cidade = [cliente.bairro, [cliente.cidade, cliente.uf].filter(Boolean).join('/'), cliente.cep && 'CEP ' + cliente.cep].filter(Boolean).join(' - ');
@@ -199,7 +209,7 @@ function gerarPedidoPDF(d) {
   ]);
 
   y = bloco(y, 'CONDIÇÕES COMERCIAIS', [
-    ['Pagamento', condicao ? condicao.descricao : '-'],
+    ['Pagamento', pedido.condicao_texto || (condicao ? condicao.descricao : '-')],
     [eCotacao ? 'Validade' : 'Entrega', dataBR(eCotacao ? pedido.validade : pedido.data_entrega)],
     ['Frete', [pedido.tipo_frete, pedido.transportadora].filter(Boolean).join(' - ')],
     ['Vendedor', usuario ? usuario.nome : '-'],
@@ -319,8 +329,9 @@ function gerarCatalogoPDF(d) {
   const { representada, tabela, produtos, empresa } = d;
   const doc = new Doc();
   const M = 30;
-  let logo = null;
+  let logo = null, logoRep = null;
   if (d.logo) { try { logo = lerImagem(d.logo); } catch { logo = null; } }
+  if (d.logoRepresentada) { try { logoRep = lerImagem(d.logoRepresentada); } catch { logoRep = null; } }
 
   const cabecalho = () => {
     if (logo) {
@@ -330,6 +341,12 @@ function gerarCatalogoPDF(d) {
       doc.imagem(logo, M, 16 + (altMax - h) / 2, w, h);
     } else {
       doc.texto(M, 36, empresa.empresa_nome || '', { tam: 14, bold: true, cor: CARVAO });
+    }
+    if (logoRep) {
+      const altMax = 30, largMax = 92;
+      let h = altMax, w = (logoRep.largura / logoRep.altura) * h;
+      if (w > largMax) { w = largMax; h = (logoRep.altura / logoRep.largura) * w; }
+      doc.imagem(logoRep, LARGURA / 2 - w / 2, 18 + (altMax - h) / 2, w, h);
     }
     doc.texto(LARGURA - M, 26, 'CATÁLOGO DE PRODUTOS', { tam: 11, bold: true, align: 'right', cor: CARVAO });
     doc.texto(LARGURA - M, 41, representada.nome, { tam: 10, bold: true, align: 'right', cor: CARVAO });

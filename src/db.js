@@ -198,6 +198,11 @@ function garantirColuna(tabela, coluna, definicao) {
   if (!cols.includes(coluna)) db.exec(`ALTER TABLE ${tabela} ADD COLUMN ${coluna} ${definicao}`);
 }
 garantirColuna('produtos', 'imagem', "TEXT DEFAULT ''");
+garantirColuna('representadas', 'logo', "TEXT DEFAULT ''");
+garantirColuna('pedidos', 'condicao_texto', "TEXT DEFAULT ''");        // prazo negociado, texto livre
+garantirColuna('pedidos', 'comissao_pct', "REAL");                     // NULL = usa a % da representada
+garantirColuna('pedidos', 'comissao_status', "TEXT DEFAULT 'pendente'"); // pendente | recebida
+garantirColuna('pedidos', 'comissao_recebida_em', "TEXT DEFAULT ''");
 
 // ---- valores padrao de configuracao (dados do representante / cabecalho do PDF)
 const cfgPadrao = {

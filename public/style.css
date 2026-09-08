@@ -198,3 +198,69 @@ hr.sep{border:none;border-top:1px solid var(--borda);margin:18px 0}
   .kpis{grid-template-columns:repeat(4,1fr)}
   .tabela-rolagem{overflow:visible}
 }
+
+/* ---------------- gráficos do painel ---------------- */
+#dica{position:fixed;z-index:80;pointer-events:none;opacity:0;transition:opacity .12s;
+  background:#25262b;color:#fff;padding:8px 11px;border-radius:8px;font-size:12px;line-height:1.5;
+  box-shadow:0 6px 20px rgba(0,0,0,.28);max-width:260px}
+#dica.on{opacity:1}
+#dica b{font-weight:750}
+
+/* colunas agrupadas: realizado x meta */
+.gr-plot{display:flex;align-items:flex-end;gap:6px;height:190px;padding:4px 0 0;overflow-x:auto}
+.gr-col{flex:1 1 0;min-width:34px;display:flex;flex-direction:column;justify-content:flex-end;
+  height:100%;border-radius:6px;padding:2px;cursor:default}
+.gr-col:hover{background:#f4f5f8}
+.gr-col.agora{background:#eef4fd;box-shadow:inset 0 0 0 1px #cfe0f7}
+.gr-barras{display:flex;align-items:flex-end;justify-content:center;gap:2px;height:100%;min-height:1px}
+.gr-b{width:44%;max-width:16px;min-height:2px;border-radius:4px 4px 0 0;display:block;
+  box-shadow:0 0 0 2px #fff;transition:height .35s}
+.gr-rot{text-align:center;font-size:10.5px;color:var(--suave);margin-top:6px;font-weight:600}
+
+/* barras horizontais com rótulo direto */
+.gr-h{display:flex;flex-direction:column;gap:9px}
+.gr-h-linha{display:flex;align-items:center;gap:10px;font-size:12.5px;cursor:default;border-radius:6px;padding:1px 2px}
+.gr-h-linha:hover{background:#f4f5f8}
+.gr-h-rot{flex:0 0 34%;max-width:34%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.gr-h-trilho{flex:1 1 auto;height:14px;background:#f0f1f4;border-radius:5px;overflow:hidden}
+.gr-h-barra{display:block;height:100%;min-width:3px;border-radius:5px;transition:width .35s}
+.gr-h-val{flex:0 0 auto;font-variant-numeric:tabular-nums;font-weight:700;font-size:12px;white-space:nowrap}
+
+/* barra de proporção */
+.gr-pilha{display:flex;height:22px;border-radius:6px;overflow:hidden;background:#f0f1f4;gap:2px}
+.gr-pilha span{display:block;min-width:2px;cursor:default;transition:width .35s}
+.gr-pilha span:hover{filter:brightness(1.08)}
+
+/* faixa colorida no topo do KPI */
+.kpi{position:relative;overflow:hidden}
+.kpi[class*="faixa-"]::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px}
+.faixa-azul::before{background:#2a78d6}
+.faixa-laranja::before{background:#eb6834}
+.faixa-verde::before{background:#1baf7a}
+.faixa-roxa::before{background:#4a3aa7}
+.faixa-amarela::before{background:#eda100}
+
+.ponto{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:middle}
+.linha-recebida{background:#f6fbf6}
+.linha-recebida td{color:#4a5560}
+
+@media (max-width:900px){
+  .gr-plot{height:150px}
+  .gr-h-rot{flex-basis:40%;max-width:40%}
+  .gr-h-val{font-size:11px}
+}
+
+/* ---------------- logomarca da representada ---------------- */
+.logo-rep{max-width:54px;max-height:36px;object-fit:contain;display:block}
+.logo-rep.vazia{display:inline-block;font-size:9.5px;color:#b6b6bd;line-height:1.15;max-width:54px}
+.caixa-logo{width:170px;height:90px;border:1px solid var(--borda);border-radius:10px;background:#fff;
+  display:flex;align-items:center;justify-content:center;overflow:hidden;padding:6px}
+.caixa-logo img{max-width:100%;max-height:100%;object-fit:contain}
+.caixa-logo span{color:var(--suave);font-size:12.5px}
+small.ajuda{display:block;font-weight:400;font-size:11px;color:var(--suave);margin-top:3px;text-transform:none;letter-spacing:0}
+
+/* seis indicadores: 3 x 2 em tela grande, 2 colunas em tela média, 1 no celular */
+.kpis.k6{grid-template-columns:repeat(3,1fr)}
+@media (max-width:1250px){.kpis.k6{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:640px){.kpis.k6{grid-template-columns:1fr}}
+.gr-b.zero{min-height:0;height:0!important}

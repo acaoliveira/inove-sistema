@@ -11,6 +11,13 @@ function lerLogo() {
   return fs.existsSync(p) ? fs.readFileSync(p) : null;
 }
 
+/** Logo da representada (arquivo guardado em dados/representadas) */
+function lerLogoRepresentada(representada) {
+  if (!representada || !representada.logo) return null;
+  const p = path.join(DATA_DIR, 'representadas', representada.logo);
+  return fs.existsSync(p) ? fs.readFileSync(p) : null;
+}
+
 const hoje = () => new Date().toLocaleDateString('sv-SE'); // AAAA-MM-DD local
 
 function proximoNumero(tipo) {
@@ -35,11 +42,16 @@ function calcular(pedido, itens, representada) {
   const base = bruto * (1 - descPed / 100);
   for (const it of itens) ipi += it.total * (1 - descPed / 100) * (it.ipi_pct / 100);
   const frete = Number(pedido.frete || 0);
+  // a % de comissao do proprio pedido tem prioridade; sem ela vale a da representada
+  const pctComissao = (pedido.comissao_pct === null || pedido.comissao_pct === undefined || pedido.comissao_pct === '')
+    ? Number(representada?.comissao_pct || 0)
+    : Number(pedido.comissao_pct);
   return {
     total_bruto: +bruto.toFixed(2),
     total_ipi: +ipi.toFixed(2),
     total: +(base + ipi + frete).toFixed(2),
-    comissao_valor: +(base * Number(representada?.comissao_pct || 0) / 100).toFixed(2),
+    comissao_pct: pctComissao,
+    comissao_valor: +(base * pctComissao / 100).toFixed(2),
   };
 }
 
@@ -111,6 +123,13 @@ module.exports = function (rota, ErroApi) {
     dados.data_emissao = dados.data_emissao || hoje();
     dados.frete = Number(dados.frete || 0);
     dados.desconto_pct = Number(dados.desconto_pct || 0);
+
+    // prazo negociado: texto livre, pode ser apagado (por isso fora do laço acima)
+    if (corpo.condicao_texto !== undefined) dados.condicao_texto = String(corpo.condicao_texto || '').trim();
+    // % de comissão do pedido: vazio devolve para a % da representada
+    if (corpo.comissao_pct !== undefined)
+      dados.comissao_pct = (corpo.comissao_pct === '' || corpo.comissao_pct === null) ? null : Number(corpo.comissao_pct);
+
     Object.assign(dados, calcular(dados, itens, representada));
 
     if (representada.pedido_minimo > 0 && dados.total < representada.pedido_minimo && dados.tipo === 'pedido')
@@ -175,6 +194,60 @@ module.exports = function (rota, ErroApi) {
     return carregar(p.id);
   });
 
+  // =============================================================== COMISSÕES
+  const hojeData = () => new Date().toLocaleDateString('sv-SE');
+
+  /** Marca uma ou várias comissões como recebidas / pendentes */
+  rota.post('/api/comissoes/marcar', ({ corpo }) => {
+    const ids = (Array.isArray(corpo.ids) ? corpo.ids : [corpo.id]).map(Number).filter(Boolean);
+    if (!ids.length) throw new ErroApi('Selecione ao menos um pedido.');
+    const recebida = corpo.status === 'recebida';
+    const quando = recebida ? (corpo.data || hojeData()) : '';
+    const st = db.prepare('UPDATE pedidos SET comissao_status = ?, comissao_recebida_em = ? WHERE id = ?');
+    const tx = db.prepare('BEGIN');
+    try {
+      tx.run();
+      for (const id of ids) st.run(recebida ? 'recebida' : 'pendente', quando, id);
+      db.prepare('COMMIT').run();
+    } catch (e) { try { db.prepare('ROLLBACK').run(); } catch {} throw e; }
+    return { ok: true, atualizados: ids.length, status: recebida ? 'recebida' : 'pendente', data: quando };
+  });
+
+  /** Lista de comissões com totais do período */
+  rota.get('/api/comissoes', ({ query }) => {
+    const cond = [`p.tipo = 'pedido'`, `p.status <> 'cancelado'`];
+    const args = [];
+    if (query.de) { cond.push('p.data_emissao >= ?'); args.push(query.de); }
+    if (query.ate) { cond.push('p.data_emissao <= ?'); args.push(query.ate); }
+    if (query.representada_id) { cond.push('p.representada_id = ?'); args.push(Number(query.representada_id)); }
+    // o resumo ignora o filtro de situação, para sempre mostrar pendente E recebida
+    const ondeBase = cond.join(' AND ');
+    const argsBase = [...args];
+    if (query.status === 'recebida' || query.status === 'pendente') {
+      cond.push(`IFNULL(p.comissao_status,'pendente') = ?`); args.push(query.status);
+    }
+    const onde = cond.join(' AND ');
+    const lista = db.prepare(`SELECT p.id, p.numero, p.data_emissao, p.status, p.total,
+        p.comissao_pct, p.comissao_valor, IFNULL(p.comissao_status,'pendente') AS comissao_status,
+        p.comissao_recebida_em, c.razao_social AS cliente_nome, r.nome AS representada_nome
+      FROM pedidos p
+      JOIN clientes c ON c.id = p.cliente_id
+      JOIN representadas r ON r.id = p.representada_id
+      WHERE ${onde} ORDER BY p.data_emissao DESC, p.id DESC LIMIT ${Number(query.limite || 500)}`).all(...args);
+
+    const soma = (st) => db.prepare(`SELECT IFNULL(SUM(p.comissao_valor),0) v, COUNT(*) q FROM pedidos p
+      WHERE ${ondeBase} AND IFNULL(p.comissao_status,'pendente') = ?`).get(...argsBase, st);
+    const pend = soma('pendente'), receb = soma('recebida');
+    return {
+      lista,
+      resumo: {
+        pendente: pend.v, qtd_pendente: pend.q,
+        recebida: receb.v, qtd_recebida: receb.q,
+        total: pend.v + receb.v, qtd_total: pend.q + receb.q,
+      },
+    };
+  });
+
   // ---- cotação vira pedido
   rota.post('/api/pedidos/:id/converter', ({ params, usuario }) => {
     const c = carregar(params.id);
@@ -199,15 +272,17 @@ module.exports = function (rota, ErroApi) {
   function dadosCompletos(id) {
     const p = carregar(id);
     if (!p) throw new ErroApi('Pedido não encontrado.', 404);
+    const representada = db.prepare('SELECT * FROM representadas WHERE id = ?').get(p.representada_id);
     return {
       pedido: p,
       itens: p.itens,
       cliente: db.prepare('SELECT * FROM clientes WHERE id = ?').get(p.cliente_id),
-      representada: db.prepare('SELECT * FROM representadas WHERE id = ?').get(p.representada_id),
+      representada,
       condicao: p.condicao_id ? db.prepare('SELECT * FROM condicoes_pagamento WHERE id = ?').get(p.condicao_id) : null,
       usuario: p.usuario_id ? db.prepare('SELECT * FROM usuarios WHERE id = ?').get(p.usuario_id) : null,
       empresa: Object.fromEntries(db.prepare('SELECT chave, valor FROM config').all().map(r => [r.chave, r.valor])),
       logo: lerLogo(),
+      logoRepresentada: lerLogoRepresentada(representada),
     };
   }
 
@@ -247,6 +322,7 @@ module.exports = function (rota, ErroApi) {
       representada, tabela, produtos,
       empresa: Object.fromEntries(db.prepare('SELECT chave, valor FROM config').all().map(r => [r.chave, r.valor])),
       logo: lerLogo(),
+      logoRepresentada: lerLogoRepresentada(representada),
     });
     const nome = `catalogo-${String(representada.nome).replace(/[^\w]/g, '-').toLowerCase()}.pdf`;
     res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Disposition': `${query.download ? 'attachment' : 'inline'}; filename="${nome}"` });
@@ -264,7 +340,7 @@ module.exports = function (rota, ErroApi) {
       cliente.cnpj ? `*CNPJ:* ${formatarCNPJ(cliente.cnpj)}` : '',
       [cliente.cidade, cliente.uf].filter(Boolean).length ? `*Cidade:* ${[cliente.cidade, cliente.uf].filter(Boolean).join('/')}` : '',
       `*Representada:* ${representada.nome}`,
-      condicao ? `*Pagamento:* ${condicao.descricao}` : '',
+      (pedido.condicao_texto || condicao) ? `*Pagamento:* ${pedido.condicao_texto || condicao.descricao}` : '',
       eCot ? (pedido.validade ? `*Validade:* ${dataBR(pedido.validade)}` : '') : (pedido.data_entrega ? `*Entrega:* ${dataBR(pedido.data_entrega)}` : ''),
       '',
       '*Itens*',

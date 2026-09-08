@@ -517,6 +517,38 @@ Só considerar pronto quando **todos** passarem:
 - [ ] Projeção do mês bate com `realizado ÷ (dia ÷ dias do mês)`.
 - [ ] Mês sem pedido no sistema mostra o valor do histórico.
 
+**Logo da representada**
+- [ ] Enviar PNG/JPG em *Representadas → Editar* grava em `dados/representadas/<id>.<ext>`
+      e a miniatura aparece na primeira coluna da lista.
+- [ ] O logo aparece no bloco REPRESENTADA do PDF do pedido e no topo do catálogo,
+      sem sobrepor o texto ao lado.
+- [ ] Representada sem logo: `GET /api/representadas/:id/logo` devolve 204 e o PDF
+      sai normal, sem espaço vazio estranho.
+
+**Prazo negociado e comissão por pedido**
+- [ ] `condicao_texto` preenchido substitui a condição da lista no PDF e no WhatsApp.
+- [ ] `comissao_pct` vazio no pedido herda a % da representada; preenchido, manda nela.
+- [ ] Campo vazio grava `NULL`, **não** zero (senão a comissão some).
+- [ ] Totais recalculados no servidor usam a % do pedido.
+
+**Comissões**
+- [ ] `POST /api/comissoes/marcar` com vários ids é transacional: ou marca todos ou nenhum.
+- [ ] O resumo de `GET /api/comissoes` ignora o filtro de situação (mostra sempre
+      pendente **e** recebida).
+- [ ] Marcar como recebida grava a data; voltar para pendente limpa a data.
+- [ ] O KPI "Comissão a receber" do painel bate com o total da tela de comissões.
+
+**Painel com gráficos**
+- [ ] Paleta validada para daltonismo; toda barra tem rótulo visível (não depende só da cor).
+- [ ] Mês com realizado zero não desenha barra azul (nada de risquinho fantasma).
+- [ ] Os 6 indicadores ficam 3×2 em tela grande e 1 por linha no celular.
+- [ ] Gráfico de meses rola na horizontal no celular sem estourar a página.
+
+**Formato brasileiro**
+- [ ] Em Metas e Histórico, digitar `35.000,00` grava 35000 e volta escrito `35.000,00`.
+- [ ] `35000`, `35.000` e `35000,50` também são aceitos.
+- [ ] "Distribuir meta anual" preenche os 12 meses já formatados.
+
 **Uso real**
 - [ ] Em 390 px de largura dá para lançar um pedido inteiro.
 - [ ] Nenhum erro no console do navegador em nenhuma tela.

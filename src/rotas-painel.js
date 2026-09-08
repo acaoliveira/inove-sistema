@@ -465,8 +465,22 @@ module.exports = function (rota, ErroApi) {
       WHERE ${fs2.sql} AND p.data_emissao BETWEEN ? AND ? ${repId ? 'AND p.representada_id = ' + repId : ''}`)
       .get(...fs2.args, inicioMes, fimMes).v;
 
+    // ---- comissões do ano: pendente x recebida
+    const comAno = db.prepare(`SELECT IFNULL(p.comissao_status,'pendente') s,
+        IFNULL(SUM(p.comissao_valor),0) v, COUNT(*) q FROM pedidos p
+      WHERE p.tipo = 'pedido' AND p.status <> 'cancelado'
+        AND p.data_emissao BETWEEN ? AND ? ${repId ? 'AND p.representada_id = ' + repId : ''}
+      GROUP BY s`).all(`${ano}-01-01`, `${ano}-12-31`);
+    const achaCom = (s) => comAno.find(x => x.s === s) || { v: 0, q: 0 };
+    const comissoes = {
+      pendente: achaCom('pendente').v, qtd_pendente: achaCom('pendente').q,
+      recebida: achaCom('recebida').v, qtd_recebida: achaCom('recebida').q,
+    };
+    comissoes.total = comissoes.pendente + comissoes.recebida;
+
     return {
       ano, mes, usuario: usuario.nome,
+      comissoes,
       dia: { data: dia, realizado: doDia.total, qtd: doDia.qtd, meta: metaDiaria },
       mes_atual: {
         realizado: doMes.total, qtd: doMes.qtd, clientes: doMes.clientes, meta: metaMensal,
