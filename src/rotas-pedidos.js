@@ -229,7 +229,8 @@ module.exports = function (rota, ErroApi) {
     const onde = cond.join(' AND ');
     const lista = db.prepare(`SELECT p.id, p.numero, p.data_emissao, p.status, p.total,
         p.comissao_pct, p.comissao_valor, IFNULL(p.comissao_status,'pendente') AS comissao_status,
-        p.comissao_recebida_em, c.razao_social AS cliente_nome, r.nome AS representada_nome
+        p.comissao_recebida_em, c.razao_social AS cliente_nome, r.nome AS representada_nome,
+        r.comissao_pct AS comissao_pct_representada
       FROM pedidos p
       JOIN clientes c ON c.id = p.cliente_id
       JOIN representadas r ON r.id = p.representada_id
