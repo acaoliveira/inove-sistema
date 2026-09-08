@@ -519,7 +519,11 @@ telas.comissoes = async () => {
           <td><small>${esc(p.representada_nome)}</small></td>
           <td>${dataBR(p.data_emissao)}</td>
           <td class="dir mono">${dinheiro(p.total)}</td>
-          <td class="dir">${p.comissao_pct != null ? pct(p.comissao_pct) : '-'}</td>
+          <td class="dir">${p.comissao_pct != null
+            ? `<b>${pct(p.comissao_pct)}</b>`
+            : (p.comissao_pct_representada
+              ? `${pct(p.comissao_pct_representada)}<br><small style="color:var(--suave)">da representada</small>`
+              : '-')}</td>
           <td class="dir mono"><b>${dinheiro(p.comissao_valor)}</b></td>
           <td class="cen">${p.comissao_status === 'recebida'
             ? `<span class="etq etq-verde">✔ Recebida</span>${p.comissao_recebida_em ? `<br><small style="color:var(--suave)">${dataBR(p.comissao_recebida_em)}</small>` : ''}`
