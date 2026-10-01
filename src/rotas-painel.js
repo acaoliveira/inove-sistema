@@ -12,6 +12,8 @@ function lerLogo() {
 }
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+const MESES_LONGOS = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const hoje = () => new Date().toLocaleDateString('sv-SE');
 
 function statusContados() {
@@ -66,6 +68,33 @@ function metaMes(ano, mes, representada_id = null, usuario_id = null) {
   return null;
 }
 
+/**
+ * Meta de um intervalo qualquer de datas.
+ * Soma as metas dos meses tocados. Mês incompleto entra proporcional aos dias:
+ * meia metade de março vale metade da meta de março. É a regra mais simples de
+ * explicar para quem olha o painel, e é a mesma usada no cálculo da meta diária.
+ */
+function metaPeriodo(de, ate, representada_id = null, usuario_id = null) {
+  const [a1, m1, d1] = de.split('-').map(Number);
+  const [a2, m2, d2] = ate.split('-').map(Number);
+  let soma = 0;
+  for (let ano = a1, mes = m1; ano < a2 || (ano === a2 && mes <= m2); mes === 12 ? (mes = 1, ano++) : mes++) {
+    const valor = metaMes(ano, mes, representada_id, usuario_id)?.valor || 0;
+    if (!valor) continue;
+    const diasNoMes = new Date(ano, mes, 0).getDate();
+    const primeiro = (ano === a1 && mes === m1) ? d1 : 1;
+    const ultimo = (ano === a2 && mes === m2) ? d2 : diasNoMes;
+    soma += valor * ((ultimo - primeiro + 1) / diasNoMes);
+  }
+  return soma;
+}
+
+/** Quantos dias tem o intervalo, contando as duas pontas */
+function diasDoPeriodo(de, ate) {
+  const ms = Date.parse(ate + 'T12:00:00') - Date.parse(de + 'T12:00:00');
+  return Math.max(1, Math.round(ms / 86400000) + 1);
+}
+
 function metaAno(ano, representada_id = null, usuario_id = null) {
   const anual = buscarMeta(ano, null, representada_id, usuario_id);
   if (anual && anual.valor > 0) return anual.valor;
@@ -113,10 +142,13 @@ module.exports = function (rota, ErroApi) {
     const representadas = db.prepare('SELECT id, nome FROM representadas WHERE ativo = 1 ORDER BY nome').all();
     const vendas = vendasPorMes(ano);
     const hist = db.prepare('SELECT * FROM historico_vendas WHERE ano = ?').all(ano);
+    // Regra: o histórico é o fechamento daquele mês. Onde ele existe, manda —
+    // mesmo que haja pedido lançado, porque o fechamento já inclui esse pedido.
+    // Sem histórico, vale o que está lançado em pedidos.
     const realizado = (mes, repId) => {
-      const v = vendas.filter(x => x.mes === mes && (!repId || x.representada_id === repId)).reduce((s, x) => s + x.total, 0);
-      if (v > 0) return v;
-      return hist.filter(h => h.mes === mes && (!repId || h.representada_id === repId)).reduce((s, h) => s + h.realizado, 0);
+      const h = hist.filter(x => x.mes === mes && (!repId || x.representada_id === repId)).reduce((s, x) => s + x.realizado, 0);
+      if (h > 0) return h;
+      return vendas.filter(x => x.mes === mes && (!repId || x.representada_id === repId)).reduce((s, x) => s + x.total, 0);
     };
     const linhas = representadas.map(r => ({
       representada_id: r.id, nome: r.nome,
@@ -300,14 +332,14 @@ module.exports = function (rota, ErroApi) {
       const faturado = somaStatus(de, ate, 'faturado');
       const emitido = somaStatus(de, ate, null);
       const antDe = `${ano - 1}-${f2(m)}-01`, antAte = `${ano - 1}-${f2(m)}-${new Date(ano - 1, m, 0).getDate()}`;
-      const anterior = somaPeriodo(antDe, antAte, filtros).total || historico(ano - 1, m);
+      const anterior = historico(ano - 1, m) || somaPeriodo(antDe, antAte, filtros).total;
       meses.push({
         mes: m, nome: MESES[m - 1],
         faturado: faturado.total, emitido: emitido.total, carteira: carteira.total,
         pedidos: emitido.qtd, comissao: carteira.comissao,
         meta: metaMes(ano, m, repId)?.valor || 0,
         anterior,
-        realizado: carteira.total > 0 ? carteira.total : historico(ano, m),
+        realizado: historico(ano, m) || carteira.total,
       });
     }
 
@@ -380,8 +412,30 @@ module.exports = function (rota, ErroApi) {
     const filtros = { representada_id: repId, usuario_id: usrId };
     const f2 = (n) => String(n).padStart(2, '0');
     const ultimoDia = new Date(ano, mes, 0).getDate();
-    const inicioMes = `${ano}-${f2(mes)}-01`, fimMes = `${ano}-${f2(mes)}-${ultimoDia}`;
     const dia = hoje();
+
+    /* ---- período analisado: mês, ano inteiro ou intervalo de datas livre ----
+       Vale o que o usuário escolheu em "Ver por". No modo intervalo, as datas
+       mandam; nos outros dois o próprio ano/mês define o começo e o fim.      */
+    const dataOk = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
+    let modo = ['mes', 'ano', 'intervalo'].includes(query.modo) ? query.modo : 'mes';
+    if (modo === 'intervalo' && !(dataOk(query.de) && dataOk(query.ate))) modo = 'mes';
+
+    let inicio, fim, rotuloPeriodo;
+    if (modo === 'intervalo') {
+      inicio = query.de <= query.ate ? query.de : query.ate;
+      fim = query.de <= query.ate ? query.ate : query.de;
+      const br = (s) => s.split('-').reverse().join('/');
+      rotuloPeriodo = `${br(inicio)} a ${br(fim)}`;
+    } else if (modo === 'ano') {
+      inicio = `${ano}-01-01`; fim = `${ano}-12-31`;
+      rotuloPeriodo = `Ano ${ano}`;
+    } else {
+      inicio = `${ano}-${f2(mes)}-01`; fim = `${ano}-${f2(mes)}-${ultimoDia}`;
+      rotuloPeriodo = `${MESES_LONGOS[mes - 1]} / ${ano}`;
+    }
+    // o bloco do mês continua existindo porque projeção e meta diária são mensais
+    const inicioMes = `${ano}-${f2(mes)}-01`, fimMes = `${ano}-${f2(mes)}-${ultimoDia}`;
 
     const mt = metaMes(ano, mes, repId, usrId);
     const metaMensal = mt?.valor || 0;
@@ -392,6 +446,21 @@ module.exports = function (rota, ErroApi) {
     const doDia = somaPeriodo(dia, dia, filtros);
     const doMes = somaPeriodo(inicioMes, fimMes, filtros);
     const doAno = somaPeriodo(`${ano}-01-01`, `${ano}-12-31`, filtros);
+    const doPeriodo = somaPeriodo(inicio, fim, filtros);
+    const metaDoPeriodo = modo === 'ano' ? metaAnual
+      : modo === 'mes' ? metaMensal
+      : metaPeriodo(inicio, fim, repId, usrId);
+    const diasPeriodo = diasDoPeriodo(inicio, fim);
+    // quantos dias do período já passaram (para a média e a projeção fazerem sentido)
+    const diasCorridos = Math.min(diasPeriodo, Math.max(1, diasDoPeriodo(inicio, dia < inicio ? inicio : (dia > fim ? fim : dia))));
+    const periodo = {
+      modo, de: inicio, ate: fim, rotulo: rotuloPeriodo, dias: diasPeriodo, dias_corridos: diasCorridos,
+      realizado: doPeriodo.total, qtd: doPeriodo.qtd, clientes: doPeriodo.clientes, comissao: doPeriodo.comissao,
+      meta: metaDoPeriodo, falta: Math.max(0, metaDoPeriodo - doPeriodo.total),
+      ticket: doPeriodo.qtd ? doPeriodo.total / doPeriodo.qtd : 0,
+      media_dia: doPeriodo.total / diasCorridos,
+      projecao: (doPeriodo.total / diasCorridos) * diasPeriodo,
+    };
 
     // ---- projeção do mês
     const diaDoMes = (agora.getFullYear() === ano && agora.getMonth() + 1 === mes) ? agora.getDate() : ultimoDia;
@@ -401,11 +470,16 @@ module.exports = function (rota, ErroApi) {
     const porRepresentada = db.prepare('SELECT id, nome FROM representadas WHERE ativo = 1 ORDER BY nome').all().map(r => {
       const m = somaPeriodo(inicioMes, fimMes, { ...filtros, representada_id: r.id });
       const a = somaPeriodo(`${ano}-01-01`, `${ano}-12-31`, { ...filtros, representada_id: r.id });
+      const p = somaPeriodo(inicio, fim, { ...filtros, representada_id: r.id });
       const mm = metaMes(ano, mes, r.id, usrId);
       return {
         id: r.id, nome: r.nome,
         realizado_mes: m.total, qtd_mes: m.qtd, meta_mes: mm?.valor || 0,
         realizado_ano: a.total, meta_ano: metaAno(ano, r.id, usrId),
+        realizado_periodo: p.total, qtd_periodo: p.qtd,
+        meta_periodo: modo === 'ano' ? metaAno(ano, r.id, usrId)
+          : modo === 'mes' ? (mm?.valor || 0)
+          : metaPeriodo(inicio, fim, r.id, usrId),
       };
     }).filter(r => !repId || r.id === repId);
 
@@ -416,7 +490,7 @@ module.exports = function (rota, ErroApi) {
       const m = i + 1;
       const sistema = vendas.filter(v => v.mes === m).reduce((s, v) => s + v.total, 0);
       const h = histAno.find(x => x.mes === m)?.v || 0;
-      return { mes: m, nome, realizado: sistema > 0 ? sistema : h, meta: metaMes(ano, m, repId, usrId)?.valor || 0 };
+      return { mes: m, nome, realizado: h > 0 ? h : sistema, meta: metaMes(ano, m, repId, usrId)?.valor || 0 };
     });
 
     // ---- histórico de anos
@@ -428,13 +502,13 @@ module.exports = function (rota, ErroApi) {
       const sis = somaPeriodo(`${a}-01-01`, `${a}-12-31`, filtros).total;
       const h = db.prepare(`SELECT IFNULL(SUM(realizado),0) v FROM historico_vendas WHERE ano = ? ${repId ? 'AND representada_id = ' + repId : ''}`).get(a).v;
       const hm = db.prepare(`SELECT IFNULL(SUM(meta),0) v FROM historico_vendas WHERE ano = ? ${repId ? 'AND representada_id = ' + repId : ''}`).get(a).v;
-      return { ano: a, realizado: sis > 0 ? sis : h, meta: metaAno(a, repId, usrId) || hm };
+      return { ano: a, realizado: h > 0 ? h : sis, meta: metaAno(a, repId, usrId) || hm };
     });
 
     // ---- cotações
     const cot = db.prepare(`SELECT status, COUNT(*) qtd, IFNULL(SUM(total),0) valor FROM pedidos
       WHERE tipo = 'cotacao' AND data_emissao BETWEEN ? AND ? ${repId ? 'AND representada_id = ' + repId : ''} GROUP BY status`)
-      .all(`${ano}-01-01`, `${ano}-12-31`);
+      .all(inicio, fim);
     const pega = (s) => cot.find(c => c.status === s) || { qtd: 0, valor: 0 };
     const ganhas = pega('ganha'), perdidas = pega('perdida');
     const cotacoes = {
@@ -449,12 +523,12 @@ module.exports = function (rota, ErroApi) {
     const topClientes = db.prepare(`SELECT c.id, c.razao_social, c.cidade, c.uf, SUM(p.total) total, COUNT(*) qtd
       FROM pedidos p JOIN clientes c ON c.id = p.cliente_id
       WHERE ${fs2.sql} AND p.data_emissao BETWEEN ? AND ? ${repId ? 'AND p.representada_id = ' + repId : ''}
-      GROUP BY c.id ORDER BY total DESC LIMIT 10`).all(...fs2.args, `${ano}-01-01`, `${ano}-12-31`);
+      GROUP BY c.id ORDER BY total DESC LIMIT 10`).all(...fs2.args, inicio, fim);
 
     const topProdutos = db.prepare(`SELECT i.descricao, i.codigo, SUM(i.quantidade) qtd, SUM(i.total) total
       FROM pedido_itens i JOIN pedidos p ON p.id = i.pedido_id
       WHERE ${fs2.sql} AND p.data_emissao BETWEEN ? AND ? ${repId ? 'AND p.representada_id = ' + repId : ''}
-      GROUP BY i.descricao ORDER BY total DESC LIMIT 10`).all(...fs2.args, `${ano}-01-01`, `${ano}-12-31`);
+      GROUP BY i.descricao ORDER BY total DESC LIMIT 10`).all(...fs2.args, inicio, fim);
 
     const ultimos = db.prepare(`SELECT p.id, p.numero, p.tipo, p.status, p.data_emissao, p.total,
         c.razao_social AS cliente_nome, r.nome AS representada_nome
@@ -463,14 +537,14 @@ module.exports = function (rota, ErroApi) {
 
     const comissao = db.prepare(`SELECT IFNULL(SUM(p.comissao_valor),0) v FROM pedidos p
       WHERE ${fs2.sql} AND p.data_emissao BETWEEN ? AND ? ${repId ? 'AND p.representada_id = ' + repId : ''}`)
-      .get(...fs2.args, inicioMes, fimMes).v;
+      .get(...fs2.args, inicio, fim).v;
 
     // ---- comissões do ano: pendente x recebida
     const comAno = db.prepare(`SELECT IFNULL(p.comissao_status,'pendente') s,
         IFNULL(SUM(p.comissao_valor),0) v, COUNT(*) q FROM pedidos p
       WHERE p.tipo = 'pedido' AND p.status <> 'cancelado'
         AND p.data_emissao BETWEEN ? AND ? ${repId ? 'AND p.representada_id = ' + repId : ''}
-      GROUP BY s`).all(`${ano}-01-01`, `${ano}-12-31`);
+      GROUP BY s`).all(inicio, fim);
     const achaCom = (s) => comAno.find(x => x.s === s) || { v: 0, q: 0 };
     const comissoes = {
       pendente: achaCom('pendente').v, qtd_pendente: achaCom('pendente').q,
@@ -489,6 +563,7 @@ module.exports = function (rota, ErroApi) {
         ticket: doMes.qtd ? doMes.total / doMes.qtd : 0, comissao,
       },
       ano_atual: { realizado: doAno.total, qtd: doAno.qtd, meta: metaAnual, falta: Math.max(0, metaAnual - doAno.total) },
+      periodo,
       por_representada: porRepresentada, serie, historico_anos: historicoAnos,
       cotacoes, top_clientes: topClientes, top_produtos: topProdutos, ultimos_pedidos: ultimos,
     };
