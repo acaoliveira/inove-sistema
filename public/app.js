@@ -319,18 +319,36 @@ telas.painel = async () => {
   const ano = Number(q.get('ano') || agora.getFullYear());
   const mes = Number(q.get('mes') || agora.getMonth() + 1);
   const rep = q.get('rep') || '';
-  const d = await get(`/painel?ano=${ano}&mes=${mes}${rep ? '&representada_id=' + rep : ''}`);
+  const modo = ['mes', 'ano', 'intervalo'].includes(q.get('modo')) ? q.get('modo') : 'mes';
+  const f2 = (n) => String(n).padStart(2, '0');
+  const de = q.get('de') || `${ano}-${f2(mes)}-01`;
+  const ate = q.get('ate') || `${ano}-${f2(mes)}-${new Date(ano, mes, 0).getDate()}`;
+
+  const par = new URLSearchParams({ modo, ano, mes });
+  if (modo === 'intervalo') { par.set('de', de); par.set('ate', ate); }
+  if (rep) par.set('representada_id', rep);
+  const d = await get('/painel?' + par);
+  const per = d.periodo;
 
   const MES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
   const pDia = d.dia.meta ? (d.dia.realizado / d.dia.meta) * 100 : 0;
-  const pMes = d.mes_atual.meta ? (d.mes_atual.realizado / d.mes_atual.meta) * 100 : 0;
+  const pPer = per.meta ? (per.realizado / per.meta) * 100 : 0;
   const pAno = d.ano_atual.meta ? (d.ano_atual.realizado / d.ano_atual.meta) * 100 : 0;
   const com = d.comissoes || { pendente: 0, recebida: 0, total: 0, qtd_pendente: 0, qtd_recebida: 0 };
 
   acoes(`
-    <select id="f-ano" style="width:auto">${[...new Set([...d.historico_anos.map(h => h.ano), ano, agora.getFullYear()])].sort((a, b) => b - a)
+    <select id="f-modo" style="width:auto" title="Como quer ver o período">
+      <option value="mes" ${modo === 'mes' ? 'selected' : ''}>Por mês</option>
+      <option value="ano" ${modo === 'ano' ? 'selected' : ''}>Por ano</option>
+      <option value="intervalo" ${modo === 'intervalo' ? 'selected' : ''}>Por período</option>
+    </select>
+    <select id="f-ano" style="width:auto" ${modo === 'intervalo' ? 'hidden' : ''}>${
+      [...new Set([...d.historico_anos.map(h => h.ano), ano, agora.getFullYear()])].sort((a, b) => b - a)
       .map(a => `<option value="${a}" ${a === ano ? 'selected' : ''}>${a}</option>`).join('')}</select>
-    <select id="f-mes" style="width:auto">${MES.map((m, i) => `<option value="${i + 1}" ${i + 1 === mes ? 'selected' : ''}>${m}</option>`).join('')}</select>
+    <select id="f-mes" style="width:auto" ${modo === 'mes' ? '' : 'hidden'}>${
+      MES.map((m, i) => `<option value="${i + 1}" ${i + 1 === mes ? 'selected' : ''}>${m}</option>`).join('')}</select>
+    <input type="date" id="f-de" value="${de}" style="width:auto" ${modo === 'intervalo' ? '' : 'hidden'} title="Data inicial">
+    <input type="date" id="f-ate" value="${ate}" style="width:auto" ${modo === 'intervalo' ? '' : 'hidden'} title="Data final">
     <select id="f-rep" style="width:auto"><option value="">Todas representadas</option>
       ${estado.representadas.map(r => `<option value="${r.id}" ${String(r.id) === rep ? 'selected' : ''}>${esc(r.nome)}</option>`).join('')}</select>
     <a class="btn btn-primario" href="#/pedido/novo">+ Pedido</a>`);
@@ -344,23 +362,23 @@ telas.painel = async () => {
       <div class="obs">Meta diária ${dinheiro(d.dia.meta)} • ${d.dia.qtd} pedido(s)</div>
       <div class="barra ${barraCor(pDia)}"><span style="width:${Math.min(100, pDia)}%"></span></div></div>
 
-    <div class="kpi faixa-azul"><div class="rot">${MES[mes - 1]} / ${ano}</div>
-      <div class="val">${dinheiro(d.mes_atual.realizado)}</div>
-      <div class="obs">Meta ${dinheiro(d.mes_atual.meta)} • ${pct(pMes)} atingido</div>
-      <div class="barra ${barraCor(pMes)}"><span style="width:${Math.min(100, pMes)}%"></span></div></div>
+    <div class="kpi faixa-azul"><div class="rot">${esc(per.rotulo)}</div>
+      <div class="val">${dinheiro(per.realizado)}</div>
+      <div class="obs">${per.meta ? `Meta ${dinheiro(per.meta)} • ${pct(pPer)} atingido` : `${per.dias} dia(s) no período`}</div>
+      <div class="barra ${barraCor(pPer)}"><span style="width:${Math.min(100, pPer)}%"></span></div></div>
 
     <div class="kpi faixa-azul"><div class="rot">Ano ${ano}</div>
       <div class="val">${dinheiro(d.ano_atual.realizado)}</div>
       <div class="obs">Meta ${dinheiro(d.ano_atual.meta)} • falta ${dinheiro(d.ano_atual.falta)}</div>
       <div class="barra ${barraCor(pAno)}"><span style="width:${Math.min(100, pAno)}%"></span></div></div>
 
-    <div class="kpi faixa-laranja"><div class="rot">Projeção do mês</div>
-      <div class="val">${dinheiro(d.mes_atual.projecao)}</div>
-      <div class="obs">Média/dia ${dinheiro(d.mes_atual.media_dia)} • falta ${dinheiro(d.mes_atual.falta)}</div></div>
+    <div class="kpi faixa-laranja"><div class="rot">Projeção do período</div>
+      <div class="val">${dinheiro(per.projecao)}</div>
+      <div class="obs">Média/dia ${dinheiro(per.media_dia)}${per.meta ? ` • falta ${dinheiro(per.falta)}` : ''}</div></div>
 
-    <div class="kpi faixa-verde"><div class="rot">Ticket médio (mês)</div>
-      <div class="val">${dinheiro(d.mes_atual.ticket)}</div>
-      <div class="obs">${d.mes_atual.qtd} pedidos • ${d.mes_atual.clientes} clientes</div></div>
+    <div class="kpi faixa-verde"><div class="rot">Ticket médio do período</div>
+      <div class="val">${dinheiro(per.ticket)}</div>
+      <div class="obs">${per.qtd} pedidos • ${per.clientes} clientes</div></div>
 
     <div class="kpi faixa-roxa"><div class="rot">Comissão a receber</div>
       <div class="val">${dinheiro(com.pendente)}</div>
@@ -374,7 +392,7 @@ telas.painel = async () => {
     <div class="cartao"><div class="cartao-tit">Quem mais vendeu em ${ano}</div>
       <div class="cartao-corpo">${graficoBarras(repsAno.map(r => ({ nome: r.nome, valor: r.realizado_ano })))}</div></div>
 
-    <div class="cartao"><div class="cartao-tit">Comissões de ${ano}</div>
+    <div class="cartao"><div class="cartao-tit">Comissões — ${esc(per.rotulo)}</div>
       <div class="cartao-corpo">
         ${graficoProporcao([
           { nome: 'Recebida', valor: com.recebida, cor: COR_OK, icone: '✔', obs: com.qtd_recebida + ' pedido(s)' },
@@ -386,18 +404,18 @@ telas.painel = async () => {
       </div></div>
   </div>
 
-  <div class="cartao"><div class="cartao-tit">Desempenho por representada — ${MES[mes - 1]}/${ano}</div>
+  <div class="cartao"><div class="cartao-tit">Desempenho por representada — ${esc(per.rotulo)}</div>
     <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
-      <thead><tr><th>Representada</th><th class="dir">Realizado mês</th><th class="dir">Meta mês</th><th style="width:130px">Atingido</th>
+      <thead><tr><th>Representada</th><th class="dir">Realizado no período</th><th class="dir">Meta do período</th><th style="width:130px">Atingido</th>
         <th class="dir">Realizado ano</th><th class="dir">Meta ano</th><th class="cen">Pedidos</th></tr></thead>
       <tbody>${d.por_representada.length ? d.por_representada.map((r, i) => {
-        const p = r.meta_mes ? (r.realizado_mes / r.meta_mes) * 100 : 0;
+        const p = r.meta_periodo ? (r.realizado_periodo / r.meta_periodo) * 100 : 0;
         return `<tr><td><span class="ponto" style="background:${CORES[i % CORES.length]}"></span><b>${esc(r.nome)}</b></td>
-          <td class="dir mono">${dinheiro(r.realizado_mes)}</td><td class="dir mono">${dinheiro(r.meta_mes)}</td>
+          <td class="dir mono">${dinheiro(r.realizado_periodo)}</td><td class="dir mono">${dinheiro(r.meta_periodo)}</td>
           <td><div class="barra ${barraCor(p)}"><span style="width:${Math.min(100, p)}%"></span></div>
               <small style="color:var(--suave)">${pct(p)}</small></td>
           <td class="dir mono">${dinheiro(r.realizado_ano)}</td><td class="dir mono">${dinheiro(r.meta_ano)}</td>
-          <td class="cen">${r.qtd_mes}</td></tr>`;
+          <td class="cen">${r.qtd_periodo}</td></tr>`;
       }).join('') : '<tr><td colspan="7" class="vazio">Cadastre suas representadas para começar.</td></tr>'}</tbody>
     </table></div></div></div>
 
@@ -416,7 +434,7 @@ telas.painel = async () => {
         }).join('') : '<tr><td colspan="5" class="vazio">Cadastre o histórico em <b>Histórico</b>.</td></tr>'}</tbody>
       </table></div></div></div>
 
-    <div class="cartao"><div class="cartao-tit">Cotações do ano</div><div class="cartao-corpo">
+    <div class="cartao"><div class="cartao-tit">Cotações — ${esc(per.rotulo)}</div><div class="cartao-corpo">
       ${graficoProporcao([
         { nome: 'Ganhas', valor: d.cotacoes.valor_ganhas, cor: COR_OK, icone: '✔', obs: d.cotacoes.ganhas + ' cotação(ões)' },
         { nome: 'Em aberto', valor: d.cotacoes.valor_abertas, cor: CORES[0], icone: '◔', obs: d.cotacoes.abertas + ' cotação(ões)' },
@@ -428,10 +446,10 @@ telas.painel = async () => {
   </div>
 
   <div class="grade g2" style="gap:16px">
-    <div class="cartao"><div class="cartao-tit">Top 10 clientes — ${ano}</div>
+    <div class="cartao"><div class="cartao-tit">Top 10 clientes — ${esc(per.rotulo)}</div>
       <div class="cartao-corpo">${graficoBarras(d.top_clientes.map(c => ({ nome: c.razao_social, valor: c.total })))}</div></div>
 
-    <div class="cartao"><div class="cartao-tit">Top 10 produtos — ${ano}</div>
+    <div class="cartao"><div class="cartao-tit">Top 10 produtos — ${esc(per.rotulo)}</div>
       <div class="cartao-corpo">${graficoBarras(d.top_produtos.map(p => ({ nome: p.descricao, valor: p.total })))}</div></div>
   </div>
 
@@ -448,8 +466,16 @@ telas.painel = async () => {
     </table></div></div></div>`);
 
   ligarDicas();
-  const aplicar = () => { location.hash = `#/painel?ano=${$('#f-ano').value}&mes=${$('#f-mes').value}&rep=${$('#f-rep').value}`; rotear(); };
-  ['#f-ano', '#f-mes', '#f-rep'].forEach(s => $(s).addEventListener('change', aplicar));
+  const aplicar = () => {
+    const m = $('#f-modo').value;
+    const p = new URLSearchParams({ modo: m, ano: $('#f-ano').value, mes: $('#f-mes').value, rep: $('#f-rep').value });
+    if (m === 'intervalo') {
+      if (!$('#f-de').value || !$('#f-ate').value) return erro('Escolha a data inicial e a data final.');
+      p.set('de', $('#f-de').value); p.set('ate', $('#f-ate').value);
+    }
+    location.hash = '#/painel?' + p; rotear();
+  };
+  ['#f-modo', '#f-ano', '#f-mes', '#f-rep', '#f-de', '#f-ate'].forEach(s => $(s).addEventListener('change', aplicar));
 };
 
 /* =========================================================================
@@ -1772,7 +1798,9 @@ telas.historico = async () => {
   const valor = (rep, mes, campo) => hist.find(h => h.mes === mes && (h.representada_id || 0) === rep)?.[campo] || '';
 
   pintar(`<div class="info-linha">Use esta tela para lançar as vendas dos anos em que você ainda não usava o sistema.
-    Assim o painel mostra a evolução ano a ano. Quando existirem pedidos lançados no mês, eles têm prioridade sobre o histórico.</div>
+    Assim o painel mostra a evolução ano a ano. <b>O valor lançado aqui é o que vale</b> — ele é o fechamento do mês,
+    e o painel usa ele mesmo que existam pedidos daquele mês no sistema. Deixe o mês em branco para o painel
+    contar os pedidos normalmente.</div>
     <div class="cartao"><div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table id="tab-hist">
       <thead><tr><th style="min-width:150px">Representada</th>
         ${MES.map(m => `<th class="dir">${m}</th>`).join('')}<th class="dir">Total</th></tr></thead>
@@ -1809,7 +1837,16 @@ telas.config = async () => {
   titulo('Configurações');
   const c = await get('/config');
   const admin = estado.usuario.papel === 'admin';
+  const rel = await get('/relogio').catch(() => null);
+  const fusoCerto = rel && rel.diferenca_utc_min === -180;
   pintar(`
+  ${rel ? `<div class="info-linha" style="${fusoCerto ? '' : 'background:#fdf6e8;border-color:#f0dcb0'}">
+    <b>Relógio do servidor:</b> ${dataBR(rel.data)} às ${esc(rel.hora)} — fuso ${esc(rel.fuso || 'não informado')}.
+    ${fusoCerto
+      ? ' Está no horário de Brasília, como deve ser.'
+      : ' <b>Atenção:</b> não está no horário de Brasília. É deste relógio que saem o “hoje” do painel, a meta diária e a data do pedido — enquanto estiver assim, o dia pode virar na hora errada.'}
+  </div>` : ''}
+
   <div class="cartao"><div class="cartao-tit">Seus dados (aparecem no cabeçalho do PDF)</div><div class="cartao-corpo">
     <form id="form-emp">
       <div class="grade g2">
