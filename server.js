@@ -120,9 +120,15 @@ servidor.on('listening', () => {
   const porta = servidor.address().port;
   try { fs.writeFileSync(path.join(DATA_DIR, 'porta.txt'), String(porta)); } catch {}
 
+  // Datas do sistema (hoje, meta diária, emissão do pedido) saem do relógio
+  // desta máquina. Se o fuso estiver errado, o dia vira na hora errada.
+  const fuso = Intl.DateTimeFormat().resolvedOptions().timeZone || process.env.TZ || '(desconhecido)';
+  const agora = new Date().toLocaleString('pt-BR');
+
   if (NA_NUVEM) {
     console.log(`\n  INOVE Representações - sistema no ar na porta ${porta}`);
-    console.log(`  Dados em: ${DATA_DIR}\n`);
+    console.log(`  Dados em: ${DATA_DIR}`);
+    console.log(`  Fuso horário: ${fuso} — agora são ${agora}\n`);
     return;
   }
 
