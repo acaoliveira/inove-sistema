@@ -60,6 +60,17 @@ module.exports = function (rota, ErroApi) {
 
   // =============================================================== CONFIGURAÇÕES
   rota.get('/api/config', () => Object.fromEntries(db.prepare('SELECT chave, valor FROM config').all().map(r => [r.chave, r.valor])));
+
+  /** Relógio do servidor — é dele que saem "hoje", a meta diária e a data do pedido */
+  rota.get('/api/relogio', () => {
+    const agora = new Date();
+    return {
+      fuso: Intl.DateTimeFormat().resolvedOptions().timeZone || process.env.TZ || '',
+      data: agora.toLocaleDateString('sv-SE'),
+      hora: agora.toLocaleTimeString('pt-BR'),
+      diferenca_utc_min: -agora.getTimezoneOffset(),
+    };
+  });
   rota.put('/api/config', ({ corpo }) => {
     for (const [k, v] of Object.entries(corpo)) setConfig(k, v);
     return { ok: true };
