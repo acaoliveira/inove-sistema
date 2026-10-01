@@ -27,20 +27,27 @@ a{cursor:pointer;text-decoration:none;color:inherit}
 /* ---------------- layout ---------------- */
 #app{display:flex;min-height:100vh}
 #menu{width:224px;background:#17171a;color:#b8b8bd;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:40}
-.marca{display:flex;align-items:center;justify-content:center;padding:20px 16px 16px}
+.marca{display:flex;align-items:center;justify-content:center;padding:16px 14px 12px}
 .marca svg{width:100%;max-width:170px;height:auto;color:#fff}
 .marca .chip{background:#fff;border-radius:8px;padding:9px 11px;width:100%;display:flex;justify-content:center}
-.marca .chip img{max-width:100%;max-height:64px;display:block}
+.marca .chip img{max-width:100%;max-height:54px;display:block}
 .login-marca{display:flex;justify-content:center;margin-bottom:20px}
 .login-marca svg{width:200px;height:auto;color:#1f1f23}
 .login-marca img{max-width:220px;max-height:110px;display:block}
 .marca-txt{font-size:15px}
-#menu nav{flex:1;padding:8px 10px;overflow:auto}
-#menu .item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;font-size:13.5px;margin-bottom:2px}
+#menu nav{flex:1;padding:8px 10px;overflow-y:auto;overflow-x:hidden;
+  /* barra de rolagem discreta: a padrão do Windows é clara e berra no menu escuro */
+  scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.16) transparent}
+#menu nav::-webkit-scrollbar{width:6px}
+#menu nav::-webkit-scrollbar-track{background:transparent}
+#menu nav::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:20px}
+#menu nav::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.3)}
+#menu nav::-webkit-scrollbar-button{display:none;height:0}
+#menu .item{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;font-size:13.5px;margin-bottom:1px}
 #menu .item i{font-style:normal;width:18px;text-align:center;font-size:14px;opacity:.9}
 #menu .item:hover{background:rgba(255,255,255,.08);color:#fff}
 #menu .item.ativo{background:#37373d;color:#fff;font-weight:600}
-.menu-rodape{padding:14px 18px;border-top:1px solid rgba(255,255,255,.1);font-size:12px}
+.menu-rodape{padding:11px 18px;border-top:1px solid rgba(255,255,255,.1);font-size:12px}
 .usuario b{display:block;color:#fff;font-size:13px}
 .usuario span{color:#8d8d95;font-size:11px;text-transform:capitalize}
 .sair{display:inline-block;margin-top:8px;color:#8d8d95}
