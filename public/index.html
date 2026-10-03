@@ -3,25 +3,37 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#17171a">
+<meta name="theme-color" content="#1b1a18">
 <title>INOVE Representações — Sistema de Pedidos</title>
+<link rel="preload" href="/fontes/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='16' fill='%232d2d31'/><rect x='30' y='18' width='40' height='16' fill='white'/><rect x='30' y='42' width='40' height='42' fill='none' stroke='white' stroke-width='6'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='16' fill='%231b1a18'/><rect x='30' y='18' width='40' height='16' fill='white'/><rect x='30' y='42' width='40' height='42' fill='none' stroke='white' stroke-width='6'/></svg>">
 </head>
 <body>
 
 <!-- ============================ LOGIN ============================ -->
 <div id="tela-login" class="login-wrap oculto">
-  <form class="login-card" id="form-login">
+  <div class="login-lado">
     <div class="login-marca" id="marca-login"></div>
-    <h1>Sistema de Pedidos</h1>
-    <p class="sub">Pedidos, cotações, clientes e metas</p>
-    <label>E-mail<input type="email" name="email" value="admin@local" required autocomplete="username"></label>
-    <label>Senha<input type="password" name="senha" required autocomplete="current-password"></label>
-    <button class="btn btn-primario btn-bloco" type="submit">Entrar</button>
-    <div class="erro" id="erro-login"></div>
-    <p class="dica">Primeiro acesso: <b>admin@local</b> / <b>admin123</b></p>
-  </form>
+    <div class="login-chamada">
+      <h1>Sistema de Pedidos</h1>
+      <p class="sub">Pedidos, cotações, clientes e metas</p>
+    </div>
+    <div class="login-rodape">INOVE Representações</div>
+  </div>
+  <div class="login-area">
+    <form class="login-card" id="form-login">
+      <div>
+        <h2>Entrar</h2>
+        <p class="sub">Use o e-mail e a senha cadastrados.</p>
+      </div>
+      <label>E-mail<input type="email" name="email" value="admin@local" required autocomplete="username"></label>
+      <label>Senha<input type="password" name="senha" required autocomplete="current-password"></label>
+      <button class="btn btn-primario btn-bloco" type="submit">Entrar</button>
+      <div class="erro" id="erro-login"></div>
+      <p class="dica">Primeiro acesso: <b>admin@local</b> / <b>admin123</b></p>
+    </form>
+  </div>
 </div>
 
 <!-- ============================ APP ============================ -->
@@ -29,20 +41,36 @@
   <aside id="menu">
     <div class="marca" id="marca-menu"></div>
     <nav>
-      <a data-tela="painel"        class="item"><i>▤</i> Painel</a>
-      <a data-tela="faturamento"   class="item"><i>💰</i> Faturamento</a>
-      <a data-tela="relatorios"    class="item"><i>📊</i> Relatórios</a>
-      <a data-tela="comissoes"     class="item"><i>🪙</i> Comissões</a>
-      <a data-tela="pedidos"       class="item"><i>🧾</i> Pedidos</a>
-      <a data-tela="cotacoes"      class="item"><i>📄</i> Cotações</a>
-      <a data-tela="clientes"      class="item"><i>🏢</i> Clientes</a>
-      <a data-tela="produtos"      class="item"><i>📦</i> Produtos</a>
-      <a data-tela="representadas" class="item"><i>🤝</i> Representadas</a>
-      <a data-tela="metas"         class="item"><i>🎯</i> Metas</a>
-      <a data-tela="historico"     class="item"><i>📚</i> Histórico</a>
-      <a data-tela="config"        class="item"><i>⚙️</i> Configurações</a>
+      <div class="menu-grupo">
+        <div class="menu-grupo-tit">Vendas</div>
+        <a data-tela="painel"      class="item">Painel</a>
+        <a data-tela="faturamento" class="item">Faturamento</a>
+        <a data-tela="relatorios"  class="item">Relatórios</a>
+        <a data-tela="comissoes"   class="item">Comissões</a>
+      </div>
+      <div class="menu-grupo">
+        <div class="menu-grupo-tit">Lançamentos</div>
+        <a data-tela="pedidos"  class="item">Pedidos</a>
+        <a data-tela="cotacoes" class="item">Cotações</a>
+      </div>
+      <div class="menu-grupo">
+        <div class="menu-grupo-tit">Cadastros</div>
+        <a data-tela="clientes"      class="item">Clientes</a>
+        <a data-tela="produtos"      class="item">Produtos</a>
+        <a data-tela="representadas" class="item">Representadas</a>
+      </div>
+      <div class="menu-grupo">
+        <div class="menu-grupo-tit">Planejamento</div>
+        <a data-tela="metas"     class="item">Metas</a>
+        <a data-tela="historico" class="item">Histórico</a>
+      </div>
+      <div class="menu-grupo">
+        <div class="menu-grupo-tit">Sistema</div>
+        <a data-tela="config" class="item">Configurações</a>
+      </div>
     </nav>
     <div class="menu-rodape">
+      <div class="avatar" id="avatar-usuario"></div>
       <div class="usuario"><b id="nome-usuario"></b><span id="papel-usuario"></span></div>
       <a class="sair" id="btn-sair">Sair</a>
     </div>
@@ -51,7 +79,10 @@
   <div id="conteudo">
     <header id="topo">
       <button id="btn-menu" class="btn-icone" aria-label="Menu">☰</button>
-      <h2 id="titulo-tela">Painel</h2>
+      <div class="topo-titulo">
+        <div class="topo-secao" id="secao-tela"></div>
+        <h2 id="titulo-tela">Painel</h2>
+      </div>
       <div class="topo-acoes" id="topo-acoes"></div>
     </header>
     <main id="tela"></main>
