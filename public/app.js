@@ -153,12 +153,11 @@ const LOGO_SVG = (contra) => `<svg viewBox="0 0 430 200" xmlns="http://www.w3.or
         font-size="31" letter-spacing="4" fill="${contra}">REPRESENTA\u00c7\u00d5ES</text>
 </svg>`;
 
-function marcaHTML(local) {
-  if (estado.temLogo) {
-    const img = `<img src="/api/logo?v=${estado.logoVersao}" alt="Logo da empresa">`;
-    return local === 'menu' ? `<span class="chip">${img}</span>` : img;
-  }
-  return LOGO_SVG(local === 'menu' ? '#17171a' : '#ffffff');
+function marcaHTML() {
+  // menu e login ficam os dois sobre fundo escuro: o logo enviado vai numa
+  // plaquinha branca para não sumir, e o SVG usa o escuro como contraste.
+  if (estado.temLogo) return `<span class="chip"><img src="/api/logo?v=${estado.logoVersao}" alt="Logo da empresa"></span>`;
+  return LOGO_SVG('#1b1a18');
 }
 async function verificarLogo() {
   try { const r = await fetch('/api/logo?t=' + Date.now()); estado.temLogo = r.status === 200; }
@@ -168,8 +167,8 @@ async function verificarLogo() {
 }
 function pintarMarca() {
   const m = $('#marca-menu'), l = $('#marca-login');
-  if (m) m.innerHTML = marcaHTML('menu');
-  if (l) l.innerHTML = marcaHTML('login');
+  if (m) m.innerHTML = marcaHTML();
+  if (l) l.innerHTML = marcaHTML();
 }
 
 /* ------------------------------------------------------------- sess\u00e3o */
@@ -181,6 +180,7 @@ async function iniciar() {
     $('#app').classList.remove('oculto');
     $('#nome-usuario').textContent = r.usuario.nome;
     $('#papel-usuario').textContent = r.usuario.papel;
+    $('#avatar-usuario').textContent = iniciais(r.usuario.nome);
     estado.representadas = await get('/representadas');
     try { estado.usuarios = await get('/usuarios'); } catch { estado.usuarios = []; }
     rotear();
@@ -216,7 +216,24 @@ async function rotear() {
   window.scrollTo(0, 0);
 }
 window.addEventListener('hashchange', rotear);
-const titulo = (t) => { $('#titulo-tela').textContent = t; };
+
+/** Primeira letra do primeiro e do último nome, para o avatar do menu */
+const iniciais = (nome) => {
+  const p = String(nome || '').trim().split(/\s+/).filter(Boolean);
+  return ((p[0] || '')[0] + (p.length > 1 ? p[p.length - 1][0] : '')).toUpperCase() || '?';
+};
+/** Grupo do menu a que cada tela pertence — aparece acima do título */
+const SECOES = {
+  painel: 'Vendas', faturamento: 'Vendas', relatorios: 'Vendas', comissoes: 'Vendas',
+  pedidos: 'Lançamentos', cotacoes: 'Lançamentos', pedido: 'Lançamentos', cotacao: 'Lançamentos',
+  clientes: 'Cadastros', produtos: 'Cadastros', representadas: 'Cadastros',
+  metas: 'Planejamento', historico: 'Planejamento', config: 'Sistema',
+};
+const titulo = (t) => {
+  $('#titulo-tela').textContent = t;
+  const nome = (location.hash.replace(/^#\/?/, '') || 'painel').split('/')[0].split('?')[0];
+  $('#secao-tela').textContent = SECOES[nome] || '';
+};
 const acoes = (html) => { $('#topo-acoes').innerHTML = html; };
 const pintar = (html) => { $('#tela').innerHTML = html; };
 
@@ -225,10 +242,14 @@ const pintar = (html) => { $('#tela').innerHTML = html; };
    ========================================================================= */
 // Paleta categórica validada para daltonismo. A ordem é fixa: a cor segue a
 // entidade, nunca a posição no ranking.
-const CORES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'];
-const COR_META = '#c9c9cf';
-const COR_OK = '#0ca30c';        // recebido / bom
-const COR_ESPERA = '#fab219';    // pendente / atenção
+// O redesign é monocromático: a barra é grafite e a cor fica reservada para
+// indicar situação (meta batida, comissão recebida, cotação em aberto).
+const COR_REALIZADO = '#1f1e1c';
+const COR_META = '#dcd9d2';
+const COR_ANTERIOR = '#9fb0c6';
+const COR_OK = '#1d7a55';        // recebido / ganho
+const COR_ESPERA = '#d99a3d';    // pendente
+const COR_ABERTA = '#5a6f8f';    // cotação em aberto
 
 /** Dica flutuante: qualquer elemento com data-dica mostra o texto ao passar o mouse */
 function ligarDicas() {
@@ -254,32 +275,29 @@ function ligarDicas() {
   });
 }
 
+/** Legenda de gráfico, para ficar no canto direito do título do cartão */
+const legendaGr = (itens) => `<span class="legenda">${itens
+  .map(i => `<span><i style="background:${i.cor}"></i>${i.nome}</span>`).join('')}</span>`;
+
 /** Colunas agrupadas: realizado x meta, mês a mês */
 function graficoColunas(serie, ano) {
   const max = Math.max(...serie.map(s => Math.max(s.realizado, s.meta)), 1);
   const mesAtual = new Date().getMonth() + 1;
   const esteAno = ano === new Date().getFullYear();
-  return `
-  <div class="gr">
-    <div class="gr-plot">
-      ${serie.map(s => {
-        const p = s.meta ? (s.realizado / s.meta) * 100 : 0;
-        const destaque = esteAno && s.mes === mesAtual;
-        return `<div class="gr-col${destaque ? ' agora' : ''}" data-dica="<b>${s.nome}/${ano}</b><br>Realizado ${dinheiro(s.realizado)}<br>Meta ${dinheiro(s.meta)}${s.meta ? '<br>' + pct(p) + ' da meta' : ''}">
-          <div class="gr-barras">
-            <span class="gr-b${s.realizado > 0 ? '' : ' zero'}" style="height:${(s.realizado / max) * 100}%;background:${CORES[0]}"></span>
-            <span class="gr-b${s.meta > 0 ? '' : ' zero'}" style="height:${(s.meta / max) * 100}%;background:${COR_META}"></span>
-          </div>
-          <div class="gr-rot">${s.nome}</div>
-        </div>`;
-      }).join('')}
-    </div>
-    <div class="legenda">
-      <span><i style="background:${CORES[0]}"></i>Realizado</span>
-      <span><i style="background:${COR_META}"></i>Meta</span>
-      <span style="margin-left:auto">maior valor do gráfico: ${dinheiro(max)}</span>
-    </div>
-  </div>`;
+  return `<div class="tabela-rolagem"><div class="gr-plot">
+    ${serie.map(s => {
+      const p = s.meta ? (s.realizado / s.meta) * 100 : 0;
+      const destaque = esteAno && s.mes === mesAtual;
+      return `<div class="gr-col${destaque ? ' agora' : ''}" data-dica="<b>${s.nome}/${ano}</b><br>Realizado ${dinheiro(s.realizado)}<br>Meta ${dinheiro(s.meta)}${s.meta ? '<br>' + pct(p) + ' da meta' : ''}">
+        <div class="gr-topo">${s.realizado > 0 ? curto(s.realizado).replace('R$ ', '') : ''}</div>
+        <div class="gr-barras">
+          <span class="gr-b${s.realizado > 0 ? '' : ' zero'}" style="height:${(s.realizado / max) * 100}%"></span>
+          <span class="gr-b meta${s.meta > 0 ? '' : ' zero'}" style="height:${(s.meta / max) * 100}%"></span>
+        </div>
+        <div class="gr-rot">${s.nome}</div>
+      </div>`;
+    }).join('')}
+  </div></div>`;
 }
 
 /** Barras horizontais com rótulo e valor visíveis */
@@ -287,11 +305,11 @@ function graficoBarras(itens) {
   const max = Math.max(...itens.map(i => i.valor), 1);
   const soma = itens.reduce((s, i) => s + i.valor, 0);
   if (!itens.length || soma <= 0) return '<div class="vazio">Sem vendas no período.</div>';
-  return `<div class="gr-h">${itens.map((i, k) => `
+  return `<div class="gr-h">${itens.map((i) => `
     <div class="gr-h-linha" data-dica="<b>${esc(i.nome)}</b><br>${dinheiro(i.valor)}${soma ? '<br>' + pct((i.valor / soma) * 100) + ' do total' : ''}">
       <span class="gr-h-rot" title="${esc(i.nome)}">${esc(i.nome)}</span>
-      <span class="gr-h-trilho"><span class="gr-h-barra" style="width:${(i.valor / max) * 100}%;background:${CORES[k % CORES.length]}"></span></span>
-      <span class="gr-h-val">${dinheiro(i.valor)}</span>
+      <span class="gr-h-trilho"><span class="gr-h-barra" style="width:${(i.valor / max) * 100}%"></span></span>
+      <span class="gr-h-val">${dinheiro(i.valor)}<small>· ${pct((i.valor / soma) * 100)}</small></span>
     </div>`).join('')}</div>`;
 }
 
@@ -302,10 +320,14 @@ function graficoProporcao(partes) {
   return `
     <div class="gr-pilha">${partes.map(p => `
       <span style="width:${(p.valor / total) * 100}%;background:${p.cor}"
-        data-dica="<b>${p.icone} ${esc(p.nome)}</b><br>${dinheiro(p.valor)}<br>${pct((p.valor / total) * 100)} do total"></span>`).join('')}
+        data-dica="<b>${esc(p.nome)}</b><br>${dinheiro(p.valor)}<br>${pct((p.valor / total) * 100)} do total"></span>`).join('')}
     </div>
-    <div class="legenda">${partes.map(p => `
-      <span><i style="background:${p.cor}"></i>${p.icone} ${esc(p.nome)} — <b>${dinheiro(p.valor)}</b>${p.obs ? ' <small>(' + p.obs + ')</small>' : ''}</span>`).join('')}
+    <div class="gr-legenda">${partes.map(p => `
+      <div>
+        <div class="rot"><span class="ponto" style="background:${p.cor}"></span>${esc(p.nome)}</div>
+        <div class="val">${dinheiro(p.valor)}</div>
+        ${p.obs ? `<div class="qtd">${p.obs}</div>` : ''}
+      </div>`).join('')}
     </div>`;
 }
 
@@ -337,11 +359,10 @@ telas.painel = async () => {
   const com = d.comissoes || { pendente: 0, recebida: 0, total: 0, qtd_pendente: 0, qtd_recebida: 0 };
 
   acoes(`
-    <select id="f-modo" style="width:auto" title="Como quer ver o período">
-      <option value="mes" ${modo === 'mes' ? 'selected' : ''}>Por mês</option>
-      <option value="ano" ${modo === 'ano' ? 'selected' : ''}>Por ano</option>
-      <option value="intervalo" ${modo === 'intervalo' ? 'selected' : ''}>Por período</option>
-    </select>
+    <span class="segmentado" id="f-modo" data-valor="${modo}">
+      ${[['mes', 'Mês'], ['ano', 'Ano'], ['intervalo', 'Período']].map(([v, t]) =>
+        `<button type="button" data-modo="${v}" class="${modo === v ? 'ativo' : ''}">${t}</button>`).join('')}
+    </span>
     <select id="f-ano" style="width:auto" ${modo === 'intervalo' ? 'hidden' : ''}>${
       [...new Set([...d.historico_anos.map(h => h.ano), ano, agora.getFullYear()])].sort((a, b) => b - a)
       .map(a => `<option value="${a}" ${a === ano ? 'selected' : ''}>${a}</option>`).join('')}</select>
@@ -385,18 +406,19 @@ telas.painel = async () => {
       <div class="obs">${com.qtd_pendente} pedido(s) • <a href="#/comissoes">ver comissões</a></div></div>
   </div>
 
-  <div class="cartao"><div class="cartao-tit">Realizado x Meta — ${ano}</div>
+  <div class="cartao"><div class="cartao-tit">Realizado x Meta — ${ano}
+      ${legendaGr([{ nome: 'Realizado', cor: COR_REALIZADO }, { nome: 'Meta', cor: COR_META }])}</div>
     <div class="cartao-corpo">${graficoColunas(d.serie, ano)}</div></div>
 
-  <div class="grade g2" style="gap:16px">
+  <div class="grade cartoes">
     <div class="cartao"><div class="cartao-tit">Quem mais vendeu em ${ano}</div>
       <div class="cartao-corpo">${graficoBarras(repsAno.map(r => ({ nome: r.nome, valor: r.realizado_ano })))}</div></div>
 
     <div class="cartao"><div class="cartao-tit">Comissões — ${esc(per.rotulo)}</div>
       <div class="cartao-corpo">
         ${graficoProporcao([
-          { nome: 'Recebida', valor: com.recebida, cor: COR_OK, icone: '✔', obs: com.qtd_recebida + ' pedido(s)' },
-          { nome: 'A receber', valor: com.pendente, cor: COR_ESPERA, icone: '⏳', obs: com.qtd_pendente + ' pedido(s)' },
+          { nome: 'Recebida', valor: com.recebida, cor: COR_OK, obs: com.qtd_recebida + ' pedido(s)' },
+          { nome: 'A receber', valor: com.pendente, cor: COR_ESPERA, obs: com.qtd_pendente + ' pedido(s)' },
         ])}
         <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
           <a class="btn btn-peq" href="#/comissoes">Abrir tela de comissões</a>
@@ -408,9 +430,9 @@ telas.painel = async () => {
     <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
       <thead><tr><th>Representada</th><th class="dir">Realizado no período</th><th class="dir">Meta do período</th><th style="width:130px">Atingido</th>
         <th class="dir">Realizado ano</th><th class="dir">Meta ano</th><th class="cen">Pedidos</th></tr></thead>
-      <tbody>${d.por_representada.length ? d.por_representada.map((r, i) => {
+      <tbody>${d.por_representada.length ? d.por_representada.map((r) => {
         const p = r.meta_periodo ? (r.realizado_periodo / r.meta_periodo) * 100 : 0;
-        return `<tr><td><span class="ponto" style="background:${CORES[i % CORES.length]}"></span><b>${esc(r.nome)}</b></td>
+        return `<tr><td><b>${esc(r.nome)}</b></td>
           <td class="dir mono">${dinheiro(r.realizado_periodo)}</td><td class="dir mono">${dinheiro(r.meta_periodo)}</td>
           <td><div class="barra ${barraCor(p)}"><span style="width:${Math.min(100, p)}%"></span></div>
               <small style="color:var(--suave)">${pct(p)}</small></td>
@@ -419,7 +441,7 @@ telas.painel = async () => {
       }).join('') : '<tr><td colspan="7" class="vazio">Cadastre suas representadas para começar.</td></tr>'}</tbody>
     </table></div></div></div>
 
-  <div class="grade g2" style="gap:16px">
+  <div class="grade cartoes">
     <div class="cartao"><div class="cartao-tit">Comparativo por ano</div>
       <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
         <thead><tr><th>Ano</th><th class="dir">Realizado</th><th class="dir">Meta</th><th class="dir">%</th><th class="dir">Var.</th></tr></thead>
@@ -436,8 +458,8 @@ telas.painel = async () => {
 
     <div class="cartao"><div class="cartao-tit">Cotações — ${esc(per.rotulo)}</div><div class="cartao-corpo">
       ${graficoProporcao([
-        { nome: 'Ganhas', valor: d.cotacoes.valor_ganhas, cor: COR_OK, icone: '✔', obs: d.cotacoes.ganhas + ' cotação(ões)' },
-        { nome: 'Em aberto', valor: d.cotacoes.valor_abertas, cor: CORES[0], icone: '◔', obs: d.cotacoes.abertas + ' cotação(ões)' },
+        { nome: 'Ganhas', valor: d.cotacoes.valor_ganhas, cor: COR_OK, obs: d.cotacoes.ganhas + ' cotação(ões)' },
+        { nome: 'Em aberto', valor: d.cotacoes.valor_abertas, cor: COR_ABERTA, obs: d.cotacoes.abertas + ' cotação(ões)' },
       ])}
       <div style="margin-top:12px;color:var(--suave);font-size:12.5px">
         Taxa de conversão: <b style="color:var(--texto)">${pct(d.cotacoes.conversao)}</b> • ${d.cotacoes.perdidas} perdida(s)
@@ -445,7 +467,7 @@ telas.painel = async () => {
     </div></div>
   </div>
 
-  <div class="grade g2" style="gap:16px">
+  <div class="grade cartoes">
     <div class="cartao"><div class="cartao-tit">Top 10 clientes — ${esc(per.rotulo)}</div>
       <div class="cartao-corpo">${graficoBarras(d.top_clientes.map(c => ({ nome: c.razao_social, valor: c.total })))}</div></div>
 
@@ -453,7 +475,7 @@ telas.painel = async () => {
       <div class="cartao-corpo">${graficoBarras(d.top_produtos.map(p => ({ nome: p.descricao, valor: p.total })))}</div></div>
   </div>
 
-  <div class="cartao"><div class="cartao-tit">Últimos lançamentos</div>
+  <div class="cartao"><div class="cartao-tit">Últimos lançamentos <a href="#/pedidos">Ver todos</a></div>
     <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
       <thead><tr><th>Número</th><th>Cliente</th><th>Representada</th><th class="cen">Situação</th><th>Data</th><th class="dir">Total</th></tr></thead>
       <tbody>${d.ultimos_pedidos.length ? d.ultimos_pedidos.map(p => `
@@ -466,8 +488,8 @@ telas.painel = async () => {
     </table></div></div></div>`);
 
   ligarDicas();
-  const aplicar = () => {
-    const m = $('#f-modo').value;
+  const aplicar = (modoNovo) => {
+    const m = modoNovo || $('#f-modo').dataset.valor;
     const p = new URLSearchParams({ modo: m, ano: $('#f-ano').value, mes: $('#f-mes').value, rep: $('#f-rep').value });
     if (m === 'intervalo') {
       if (!$('#f-de').value || !$('#f-ate').value) return erro('Escolha a data inicial e a data final.');
@@ -475,7 +497,8 @@ telas.painel = async () => {
     }
     location.hash = '#/painel?' + p; rotear();
   };
-  ['#f-modo', '#f-ano', '#f-mes', '#f-rep', '#f-de', '#f-ate'].forEach(s => $(s).addEventListener('change', aplicar));
+  $$('#f-modo button').forEach(b => b.addEventListener('click', () => aplicar(b.dataset.modo)));
+  ['#f-ano', '#f-mes', '#f-rep', '#f-de', '#f-ate'].forEach(s => $(s).addEventListener('change', () => aplicar()));
 };
 
 /* =========================================================================
@@ -498,7 +521,7 @@ telas.comissoes = async () => {
   const d = await get('/comissoes?' + par);
   const r = d.resumo;
 
-  acoes(`<button class="btn btn-verde" id="btn-marcar">✔ Marcar selecionadas como recebidas</button>
+  acoes(`<button class="btn btn-verde" id="btn-marcar">Marcar selecionadas como recebidas</button>
          <button class="btn" id="btn-desmarcar">Voltar para pendente</button>`);
 
   pintar(`
@@ -514,19 +537,18 @@ telas.comissoes = async () => {
     <button class="btn btn-primario" id="btn-filtrar">Filtrar</button>
   </div>
 
-  <div class="kpis">
-    <div class="kpi faixa-amarela"><div class="rot">A receber</div><div class="val">${dinheiro(r.pendente)}</div>
-      <div class="obs">${r.qtd_pendente} pedido(s)</div></div>
-    <div class="kpi faixa-verde"><div class="rot">Já recebida</div><div class="val">${dinheiro(r.recebida)}</div>
-      <div class="obs">${r.qtd_recebida} pedido(s)</div></div>
-    <div class="kpi faixa-azul"><div class="rot">Total do período</div><div class="val">${dinheiro(r.total)}</div>
-      <div class="obs">${r.qtd_total} pedido(s)</div></div>
-  </div>
-
   <div class="cartao"><div class="cartao-corpo">
+    <div class="resumo-comissao">
+      <div><div class="rot">A receber</div><div class="val">${dinheiro(r.pendente)}</div>
+        <div class="obs">${r.qtd_pendente} pedido(s)</div></div>
+      <div><div class="rot">Já recebida</div><div class="val">${dinheiro(r.recebida)}</div>
+        <div class="obs">${r.qtd_recebida} pedido(s)</div></div>
+      <div><div class="rot">Total do período</div><div class="val">${dinheiro(r.total)}</div>
+        <div class="obs">${r.qtd_total} pedido(s)</div></div>
+    </div>
     ${graficoProporcao([
-      { nome: 'Recebida', valor: r.recebida, cor: COR_OK, icone: '✔', obs: r.qtd_recebida + ' pedido(s)' },
-      { nome: 'A receber', valor: r.pendente, cor: COR_ESPERA, icone: '⏳', obs: r.qtd_pendente + ' pedido(s)' },
+      { nome: 'Recebida', valor: r.recebida, cor: COR_OK, obs: r.qtd_recebida + ' pedido(s)' },
+      { nome: 'A receber', valor: r.pendente, cor: COR_ESPERA, obs: r.qtd_pendente + ' pedido(s)' },
     ])}
   </div></div>
 
@@ -552,8 +574,8 @@ telas.comissoes = async () => {
               : '-')}</td>
           <td class="dir mono"><b>${dinheiro(p.comissao_valor)}</b></td>
           <td class="cen">${p.comissao_status === 'recebida'
-            ? `<span class="etq etq-verde">✔ Recebida</span>${p.comissao_recebida_em ? `<br><small style="color:var(--suave)">${dataBR(p.comissao_recebida_em)}</small>` : ''}`
-            : '<span class="etq etq-laranja">⏳ A receber</span>'}</td></tr>`).join('')
+            ? `<span class="etq etq-verde">Recebida</span>${p.comissao_recebida_em ? `<br><small style="color:var(--suave)">${dataBR(p.comissao_recebida_em)}</small>` : ''}`
+            : '<span class="etq etq-laranja">A receber</span>'}</td></tr>`).join('')
         : '<tr><td colspan="9" class="vazio"><b>Nenhum pedido no período</b>Ajuste os filtros acima.</td></tr>'}</tbody>
     </table></div></div></div>
 
@@ -652,7 +674,7 @@ telas.relatorios = async () => {
             <td class="dir">${m.meta ? `<span class="etq ${p >= 100 ? 'etq-verde' : p >= 70 ? 'etq-laranja' : 'etq-vermelha'}">${pct(p)}</span>` : '-'}</td></tr>`;
         }).join('')}</tbody></table></div></div>` : ''}
 
-    <div class="grade g2" style="gap:16px">
+    <div class="grade cartoes">
       <div class="cartao"><div class="cartao-tit">Por representada</div>
         <div class="cartao-corpo sem-pad"><table>
           <thead><tr><th>Representada</th><th class="cen">Pedidos</th><th class="dir">Total</th><th class="dir">%</th></tr></thead>
@@ -674,14 +696,14 @@ telas.relatorios = async () => {
       <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
         <thead><tr><th>Produto</th><th>Código</th><th class="dir">Quantidade</th><th class="dir">Total</th></tr></thead>
         <tbody>${d.produtos.length ? d.produtos.map(p => `<tr><td>${esc(p.descricao)}</td>
-          <td class="mono">${esc(p.codigo || '-')}</td><td class="dir mono">${numero(p.quantidade)}</td>
+          <td class="cod">${esc(p.codigo || '-')}</td><td class="dir mono">${numero(p.quantidade)}</td>
           <td class="dir mono">${dinheiro(p.total)}</td></tr>`).join('')
           : '<tr><td colspan="4" class="vazio">Sem vendas no período.</td></tr>'}</tbody></table></div></div></div>
 
     <div class="cartao"><div class="cartao-tit">Pedidos do período (${d.pedidos.length})</div>
       <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
         <thead><tr><th>Número</th><th>Data</th><th>Cliente</th><th>Representada</th><th class="cen">Situação</th><th class="dir">Total</th></tr></thead>
-        <tbody>${d.pedidos.length ? d.pedidos.map(p => `<tr><td class="mono">${p.numero}</td><td>${dataBR(p.data_emissao)}</td>
+        <tbody>${d.pedidos.length ? d.pedidos.map(p => `<tr><td class="cod">${p.numero}</td><td>${dataBR(p.data_emissao)}</td>
           <td>${esc(p.cliente)}</td><td><small>${esc(p.representada)}</small></td>
           <td class="cen"><small>${esc(p.status)}</small></td><td class="dir mono">${dinheiro(p.total)}</td></tr>`).join('')
           : '<tr><td colspan="6" class="vazio">Nenhum pedido no período.</td></tr>'}</tbody></table></div></div></div>
@@ -977,7 +999,7 @@ function editor(tipoPadrao) {
         <tbody id="corpo-itens"></tbody>
       </table></div></div></div>
 
-      <div class="grade g2" style="gap:16px">
+      <div class="grade cartoes">
         <div class="cartao"><div class="cartao-tit">Observações</div><div class="cartao-corpo">
           <textarea name="observacoes" placeholder="Instruções de entrega, negociação, prazo especial…" ${bloqueado ? 'readonly' : ''}>${esc(doc.observacoes || '')}</textarea>
         </div></div>
@@ -1034,9 +1056,16 @@ function editor(tipoPadrao) {
     $('[name=cliente_id]').addEventListener('change', mostrarCliente);
     function mostrarCliente() {
       const c = clientes.find(x => x.id === Number($('[name=cliente_id]').value));
-      $('#info-cliente').innerHTML = c ? `<div class="info-linha"><b>${esc(c.razao_social)}</b>${c.cnpj ? ' • CNPJ ' + cnpjFmt(c.cnpj) : ''}
-        ${c.telefone ? ' • ' + esc(c.telefone) : ''}<br>${esc([c.logradouro, c.numero, c.bairro, [c.cidade, c.uf].filter(Boolean).join('/')].filter(Boolean).join(', '))}
-        ${c.qtd_pedidos ? ` • ${c.qtd_pedidos} pedido(s), última compra ${dataBR(c.ultima_compra)}` : ' • primeiro pedido deste cliente'}</div>` : '';
+      if (!c) { $('#info-cliente').innerHTML = ''; return; }
+      const endereco = esc([c.logradouro, c.numero, c.bairro, [c.cidade, c.uf].filter(Boolean).join('/')].filter(Boolean).join(', '));
+      const partes = [
+        c.cnpj ? `CNPJ <span class="cod">${cnpjFmt(c.cnpj)}</span>` : '',
+        c.telefone ? esc(c.telefone) : '',
+        endereco,
+        c.qtd_pedidos ? `${c.qtd_pedidos} pedido(s), última compra ${dataBR(c.ultima_compra)}` : 'primeiro pedido deste cliente',
+      ].filter(Boolean);
+      $('#info-cliente').innerHTML = `<div class="resumo-cliente"><b>${esc(c.razao_social)}</b>
+        ${partes.map(x => `<span>${x}</span>`).join('')}</div>`;
     }
 
     /* ---- itens */
@@ -1089,10 +1118,10 @@ function editor(tipoPadrao) {
         ${frete ? `<tr><td>Frete</td><td class="dir mono">${dinheiro(frete)}</td></tr>` : ''}
         <tr><td style="border-top:2px solid var(--borda)"><b>TOTAL</b></td>
             <td class="dir mono" style="border-top:2px solid var(--borda);font-size:19px"><b>${dinheiro(total)}</b></td></tr>
-        <tr><td colspan="2" style="color:var(--suave);font-size:12px;border:0">
-          ${itens.length} item(ns) • ${numero(pecas)} unidade(s)
-          ${comPct ? ` • comissão ${pct(comPct)} = ${dinheiro(base * comPct / 100)}${comProprio ? ' <b>(deste pedido)</b>' : ''}` : ''}
-          ${rep && rep.pedido_minimo ? ` • mínimo ${dinheiro(rep.pedido_minimo)}` : ''}</td></tr>`;
+        <tr><td colspan="2" class="resumo-totais">
+          <span>${itens.length} item(ns)</span><span>${numero(pecas)} unidade(s)</span>
+          ${comPct ? `<span>comissão ${pct(comPct)} = ${dinheiro(base * comPct / 100)}${comProprio ? ' <b>(deste pedido)</b>' : ''}</span>` : ''}
+          ${rep && rep.pedido_minimo ? `<span>mínimo ${dinheiro(rep.pedido_minimo)}</span>` : ''}</td></tr>`;
     }
 
     /* ---- adicionar produto */
@@ -1152,7 +1181,8 @@ function editor(tipoPadrao) {
     $('#btn-situacao')?.addEventListener('click', () => {
       const lista = eCot ? ['rascunho', 'enviada', 'ganha', 'perdida', 'cancelado'] : ['rascunho', 'aberto', 'enviado', 'faturado', 'cancelado'];
       abrirModal(`<h3>Alterar situação</h3>
-        <div class="busca-lista">${lista.map(s => `<div data-s="${s}"><b>${ETIQUETAS[s][1]}</b></div>`).join('')}</div>`);
+        <div class="busca-lista lista-situacao">${lista.map(s => `<div data-s="${s}">${etq(s)}
+          ${s === doc.status ? '<span class="atual">atual</span>' : ''}</div>`).join('')}</div>`);
       $('#modal-corpo .busca-lista').addEventListener('click', async e => {
         const d = e.target.closest('[data-s]'); if (!d) return;
         try { await api('POST', `/pedidos/${id}/status`, { status: d.dataset.s }); fecharModal(); ok('Situação atualizada.'); rotear(); }
@@ -1164,7 +1194,7 @@ function editor(tipoPadrao) {
       abrirModal(`<h3>Mais ações</h3><div class="busca-lista">
         <div data-a="duplicar"><b>Duplicar</b><small>Cria uma cópia com a data de hoje</small></div>
         ${eCot ? '<div data-a="converter"><b>Converter em pedido</b><small>Gera o pedido e marca a cotação como ganha</small></div>' : ''}
-        <div data-a="excluir"><b style="color:var(--vermelho)">Excluir</b><small>Remove definitivamente</small></div>
+        <div data-a="excluir" class="perigo"><b>Excluir</b><small>Remove definitivamente</small></div>
       </div>`);
       $('#modal-corpo .busca-lista').addEventListener('click', async e => {
         const d = e.target.closest('[data-a]'); if (!d) return;
@@ -1229,7 +1259,7 @@ telas.clientes = async () => {
     $('#corpo').innerHTML = lista.length ? lista.map(c => `<tr>
       <td><b>${esc(c.nome_fantasia || c.razao_social)}</b>${!c.ativo ? ' <span class="etq etq-cinza">inativo</span>' : ''}
         <br><small style="color:var(--suave)">${esc(c.razao_social)}</small></td>
-      <td class="mono">${cnpjFmt(c.cnpj)}</td>
+      <td class="cod">${cnpjFmt(c.cnpj)}</td>
       <td>${esc([c.cidade, c.uf].filter(Boolean).join('/'))}</td>
       <td><small>${esc(c.contato || '')}${c.telefone ? '<br>' + esc(c.telefone) : ''}</small></td>
       <td class="cen">${c.qtd_pedidos}</td><td class="dir mono">${dinheiro(c.total_comprado)}</td>
@@ -1361,7 +1391,7 @@ telas.produtos = async () => {
     const lista = await get('/produtos?' + p);
     $('#corpo').innerHTML = lista.length ? lista.map(x => `<tr>
       <td>${fotoProduto(x)}</td>
-      <td class="mono">${esc(x.codigo)}</td>
+      <td class="cod">${esc(x.codigo)}</td>
       <td><b>${esc(x.descricao)}</b>${x.embalagem > 1 ? `<br><small style="color:var(--suave)">Caixa com ${numero(x.embalagem)}</small>` : ''}</td>
       <td><small>${esc(x.representada_nome)}</small></td><td class="cen">${esc(x.unidade)}</td>
       <td class="dir mono">${dinheiro(x.preco_base)}</td>
@@ -1527,7 +1557,7 @@ telas.representadas = async () => {
       <tbody>${estado.representadas.length ? estado.representadas.map(r => `<tr>
         <td>${logoRep(r)}</td>
         <td><b>${esc(r.nome)}</b>${!r.ativo ? ' <span class="etq etq-cinza">inativa</span>' : ''}</td>
-        <td class="mono">${cnpjFmt(r.cnpj)}</td>
+        <td class="cod">${cnpjFmt(r.cnpj)}</td>
         <td><small>${esc(r.contato || '')}${r.telefone ? '<br>' + esc(r.telefone) : ''}</small></td>
         <td class="dir">${pct(r.comissao_pct)}</td><td class="dir mono">${r.pedido_minimo ? dinheiro(r.pedido_minimo) : '-'}</td>
         <td class="cen">${r.qtd_produtos}</td><td class="cen">${r.qtd_tabelas}</td>
@@ -1703,40 +1733,78 @@ telas.metas = async () => {
          <button class="btn btn-primario" id="btn-salvar">Salvar metas</button>` : soAdmin}`);
   const g = await get('/metas/grade?ano=' + ano);
 
-  pintar(`<div class="info-linha">Digite a meta de cada representada por mês. O sistema calcula sozinho a
+  const MES_LONGO = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+  const agora = new Date();
+  const mesAtual = agora.getFullYear() === ano ? agora.getMonth() + 1 : 0;
+  const totalRep = (l) => l.meses.reduce((s, m) => s + m.meta, 0);
+
+  pintar(`
+  <div class="info-linha">Digite a meta de cada representada por mês. O sistema calcula sozinho a
     <b>meta diária</b> (meta do mês ÷ dias úteis), a <b>meta anual</b> (soma dos meses) e compara com o realizado.</div>
-    <div class="cartao"><div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table id="tab-metas">
-      <thead><tr><th style="min-width:150px">Representada</th>
-        ${g.meses.map((m, i) => `<th class="dir">${m}</th>`).join('')}<th class="dir">Total ano</th></tr></thead>
-      <tbody>
-        ${g.linhas.map(l => `<tr data-rep="${l.representada_id}">
-          <td><b>${esc(l.nome)}</b></td>
-          ${l.meses.map(m => `<td><input type="text" inputmode="decimal" class="dir meta-in" data-mes="${m.mes}" value="${moedaBR(m.meta || '')}" placeholder="0,00" style="min-width:104px">
-            <small style="color:var(--suave);display:block;text-align:right">real ${curto(m.realizado)}</small></td>`).join('')}
-          <td class="dir mono"><b class="tot-linha">${dinheiro(l.meses.reduce((s, m) => s + m.meta, 0))}</b></td></tr>`).join('')}
-        <tr style="background:#fafbfc"><td><b>Total</b></td>
-          ${g.total.map(t => `<td class="dir mono"><b class="tot-mes">${curto(t.meta)}</b>
-            <small style="color:var(--suave);display:block">real ${curto(t.realizado)}</small></td>`).join('')}
-          <td class="dir mono"><b id="tot-geral">${dinheiro(g.total.reduce((s, t) => s + t.meta, 0))}</b></td></tr>
-      </tbody></table></div></div></div>
-    <div class="cartao"><div class="cartao-tit">Dias úteis por mês (para a meta diária)</div><div class="cartao-corpo">
-      <div class="grade g6">${g.meses.map((m, i) => `<label class="campo">${m}
-        <input type="number" class="dias-in" data-mes="${i + 1}" value="${g.linhas[0]?.meses[i]?.dias_uteis || 22}"></label>`).join('')}</div>
-    </div></div>`);
+
+  <div class="cartao"><div class="cartao-tit">Total do ano por representada</div>
+    <div class="cartao-corpo metas-resumo">
+      <div class="metas-reps">
+        ${g.linhas.map(l => `<div>
+          <div class="rot">${esc(l.nome)}</div>
+          <div class="val tot-rep" data-rep="${l.representada_id}">${dinheiro(totalRep(l))}</div>
+        </div>`).join('')}
+      </div>
+      <div class="metas-anual">
+        <div class="rot">Meta anual</div>
+        <div class="val" id="tot-geral">${dinheiro(g.total.reduce((s, t) => s + t.meta, 0))}</div>
+      </div>
+    </div></div>
+
+  <div class="metas-meses">
+    ${MES_LONGO.map((nome, i) => {
+      const mes = i + 1;
+      const diasUteis = g.linhas[0]?.meses[i]?.dias_uteis || 22;
+      const tot = g.total[i] || { meta: 0, realizado: 0 };
+      return `<div class="cartao mes-cartao${mes === mesAtual ? ' agora' : ''}">
+        <div class="mes-topo">
+          <span class="nome">${nome}</span>
+          <label>Dias úteis
+            <input type="number" class="dias-in" data-mes="${mes}" value="${diasUteis}" min="1" max="31"></label>
+        </div>
+        <div class="mes-corpo">
+          ${g.linhas.map(l => {
+            const m = l.meses[i];
+            return `<div class="mes-rep">
+              <div>
+                <div class="nome">${esc(l.nome)}</div>
+                <div class="real">real ${curto(m.realizado)}</div>
+              </div>
+              <input type="text" inputmode="decimal" class="meta-in" data-mes="${mes}"
+                data-rep="${l.representada_id}" value="${moedaBR(m.meta || '')}" placeholder="0,00"
+                aria-label="Meta de ${esc(l.nome)} em ${nome}">
+            </div>`;
+          }).join('')}
+        </div>
+        <div class="mes-pe">
+          <span>Total <span class="real">real ${curto(tot.realizado)}</span></span>
+          <b class="tot-mes" data-mes="${mes}">${dinheiro(tot.meta)}</b>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`);
 
   const recalcular = () => {
     let geral = 0;
-    $$('#tab-metas tbody tr[data-rep]').forEach(tr => {
-      const s = $$('.meta-in', tr).reduce((a, i) => a + numBR(i.value), 0);
-      $('.tot-linha', tr).textContent = dinheiro(s); geral += s;
+    // total por representada (soma dos 12 meses daquela representada)
+    $$('.tot-rep').forEach(el => {
+      const s = $$(`.meta-in[data-rep="${el.dataset.rep}"]`).reduce((a, i) => a + numBR(i.value), 0);
+      el.textContent = dinheiro(s); geral += s;
     });
     $('#tot-geral').textContent = dinheiro(geral);
-    $$('.tot-mes').forEach((el, i) => {
-      const s = $$(`#tab-metas tbody tr[data-rep] .meta-in[data-mes="${i + 1}"]`).reduce((a, x) => a + numBR(x.value), 0);
-      el.textContent = curto(s);
+    // total por mês (soma das representadas naquele mês)
+    $$('.tot-mes').forEach(el => {
+      const s = $$(`.meta-in[data-mes="${el.dataset.mes}"]`).reduce((a, i) => a + numBR(i.value), 0);
+      el.textContent = dinheiro(s);
     });
   };
-  $('#tab-metas').addEventListener('input', recalcular);
+  $('.metas-meses').addEventListener('input', recalcular);
   ligarCamposBR('.meta-in', recalcular);
   $('#f-ano').addEventListener('change', () => { location.hash = '#/metas?ano=' + $('#f-ano').value; rotear(); });
 
@@ -1765,22 +1833,20 @@ telas.metas = async () => {
         if (r.reduce((a, b) => a + b, 0) > 0) pesos = r.map(v => v || 0.0001);
       }
       const soma = pesos.reduce((a, b) => a + b, 0);
-      const tr = $(`#tab-metas tr[data-rep="${rep}"]`);
-      $$('.meta-in', tr).forEach((inp, i) => { inp.value = moedaBR((valor * pesos[i]) / soma); });
+      for (let m = 1; m <= 12; m++) {
+        const inp = $(`.meta-in[data-rep="${rep}"][data-mes="${m}"]`);
+        if (inp) inp.value = moedaBR((valor * pesos[m - 1]) / soma);
+      }
       recalcular(); fecharModal(); ok('Meta distribuída — confira e clique em Salvar metas.');
     });
   });
 
   $('#btn-salvar')?.addEventListener('click', async () => {
     const dias = {}; $$('.dias-in').forEach(i => dias[i.dataset.mes] = Number(i.value) || 22);
-    const itens = [];
-    $$('#tab-metas tbody tr[data-rep]').forEach(tr => {
-      const rep = Number(tr.dataset.rep);
-      $$('.meta-in', tr).forEach(inp => itens.push({
-        ano, mes: Number(inp.dataset.mes), representada_id: rep,
-        valor: numBR(inp.value), dias_uteis: dias[inp.dataset.mes],
-      }));
-    });
+    const itens = $$('.meta-in').map(inp => ({
+      ano, mes: Number(inp.dataset.mes), representada_id: Number(inp.dataset.rep),
+      valor: numBR(inp.value), dias_uteis: dias[inp.dataset.mes],
+    }));
     try { await api('POST', '/metas', { itens }); ok('Metas salvas!'); rotear(); } catch (e) { erro(e); }
   });
 };
@@ -1840,14 +1906,16 @@ telas.config = async () => {
   const rel = await get('/relogio').catch(() => null);
   const fusoCerto = rel && rel.diferenca_utc_min === -180;
   pintar(`
-  ${rel ? `<div class="info-linha" style="${fusoCerto ? '' : 'background:#fdf6e8;border-color:#f0dcb0'}">
+  ${rel ? `<div class="${fusoCerto ? 'info-linha nota-ok' : 'aviso-linha'}">
     <b>Relógio do servidor:</b> ${dataBR(rel.data)} às ${esc(rel.hora)} — fuso ${esc(rel.fuso || 'não informado')}.
     ${fusoCerto
       ? ' Está no horário de Brasília, como deve ser.'
       : ' <b>Atenção:</b> não está no horário de Brasília. É deste relógio que saem o “hoje” do painel, a meta diária e a data do pedido — enquanto estiver assim, o dia pode virar na hora errada.'}
   </div>` : ''}
 
-  <div class="cartao"><div class="cartao-tit">Seus dados (aparecem no cabeçalho do PDF)</div><div class="cartao-corpo">
+  <div class="duas-colunas">
+    <div class="coluna">
+      <div class="cartao"><div class="cartao-tit"><div>Seus dados<small class="tit-sub">Aparecem no cabeçalho do PDF</small></div></div><div class="cartao-corpo">
     <form id="form-emp">
       <div class="grade g2">
         <label class="campo">Nome da representação<input name="empresa_nome" value="${esc(c.empresa_nome || '')}"></label>
@@ -1859,13 +1927,22 @@ telas.config = async () => {
       </div>
       <label class="campo">Endereço<input name="empresa_endereco" value="${esc(c.empresa_endereco || '')}"></label>
       <label class="campo">Situações que contam como venda realizada nas metas
-        <input name="contar_status" value="${esc(c.contar_status || '')}" placeholder="aberto,enviado,faturado"></label>
+        <input class="cod" name="contar_status" value="${esc(c.contar_status || '')}" placeholder="aberto,enviado,faturado"></label>
       <button class="btn btn-primario" ${admin ? '' : 'disabled'}>Salvar</button>
       ${admin ? '' : '<small style="color:var(--suave);margin-left:10px">Somente administradores alteram estas configurações.</small>'}
     </form>
   </div></div>
 
-  ${admin ? `<div class="cartao"><div class="cartao-tit">Logo da empresa</div><div class="cartao-corpo">
+      <div class="cartao"><div class="cartao-tit">Minha senha</div><div class="cartao-corpo">
+    <form id="form-senha"><div class="grade g3">
+      <label class="campo">Senha atual<input type="password" name="atual" required></label>
+      <label class="campo">Nova senha<input type="password" name="nova" required></label>
+      <label class="campo">&nbsp;<button class="btn btn-primario btn-bloco">Alterar senha</button></label>
+    </div></form>
+  </div></div>
+    </div>
+    <div class="coluna">
+      ${admin ? `<div class="cartao"><div class="cartao-tit">Logo da empresa</div><div class="cartao-corpo">
     <p style="margin-top:0;color:var(--suave);font-size:13px">Envie o arquivo oficial da marca (PNG ou JPG, at\u00e9 3 MB).
       Ele passa a aparecer na tela de acesso, no menu e no cabe\u00e7alho do PDF que o cliente recebe.
       Prefira PNG com fundo transparente ou branco.</p>
@@ -1880,15 +1957,7 @@ telas.config = async () => {
     </div>
   </div></div>` : ''}
 
-  <div class="cartao"><div class="cartao-tit">Minha senha</div><div class="cartao-corpo">
-    <form id="form-senha"><div class="grade g3">
-      <label class="campo">Senha atual<input type="password" name="atual" required></label>
-      <label class="campo">Nova senha<input type="password" name="nova" required></label>
-      <label class="campo">&nbsp;<button class="btn btn-primario btn-bloco">Alterar senha</button></label>
-    </div></form>
-  </div></div>
-
-  ${admin ? `<div class="cartao"><div class="cartao-tit">Equipe
+      ${admin ? `<div class="cartao"><div class="cartao-tit">Equipe
     <button class="btn btn-peq btn-primario" id="btn-novo-usuario">+ Novo usuário</button></div>
     <div class="cartao-corpo sem-pad"><table>
       <thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th class="cen">Ativo</th><th></th></tr></thead>
@@ -1896,9 +1965,11 @@ telas.config = async () => {
 
   <div class="cartao"><div class="cartao-tit">Backup</div><div class="cartao-corpo">
     <p style="margin-top:0;color:var(--suave);font-size:13px">Baixe uma cópia do banco de dados. Guarde em local seguro —
-      para restaurar, substitua o arquivo <b>dados/repsys.db</b> na pasta do sistema.</p>
+      para restaurar, substitua o arquivo <b class="cod">dados/repsys.db</b> na pasta do sistema.</p>
     <a class="btn btn-primario" href="/api/backup" download>Baixar backup agora</a>
-  </div></div>` : ''}`);
+  </div></div>` : ''}
+    </div>
+  </div>`);
 
   $('#form-emp').addEventListener('submit', async e => {
     e.preventDefault();
