@@ -335,6 +335,24 @@ td .cod,th .cod,td.cod{font-size:12.5px;font-weight:500}
 .modal-caixa.m-produto{max-width:820px}
 .modal-caixa.m-cliente{max-width:880px}
 /* lista de escolha */
+.modal-sub{font-size:13px;color:var(--suave);line-height:1.5}
+.modal-sub b{color:var(--texto);font-weight:600}
+/* lista de acertos: lista, nao tabela — no celular o botao tem que caber sem
+   rolagem lateral, entao cada item quebra em duas linhas */
+.acerto-lista{border:1px solid var(--borda);border-radius:var(--raio);max-height:46vh;overflow-y:auto}
+.acerto-item{display:flex;align-items:center;gap:12px;padding:12px 14px;
+  border-bottom:1px solid var(--linha);flex-wrap:wrap}
+.acerto-item:last-child{border-bottom:none}
+.acerto-nome{flex:1;min-width:150px;display:flex;flex-direction:column;gap:2px}
+.acerto-nome b{font-size:13.5px;font-weight:600}
+.acerto-nome small{font-size:12px;color:var(--suave)}
+.acerto-val{font-size:15px;font-weight:600;white-space:nowrap;margin-left:auto}
+.acerto-item .btn{flex:0 0 auto}
+.acerto-total{background:var(--fundo-suave)}
+@media (max-width:560px){
+  .acerto-nome{flex:1 0 100%}
+  .acerto-item .btn{flex:1}
+}
 .busca-lista{padding:12px;display:flex;flex-direction:column;gap:2px;max-height:360px;overflow:auto}
 .busca-lista > div{padding:12px;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:12px}
 .busca-lista > div:hover{background:var(--fundo)}

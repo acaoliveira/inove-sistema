@@ -85,6 +85,7 @@ const ok = (m) => aviso(m, 'ok');
 function abrirModal(html) {
   $('#modal-corpo').innerHTML = html;
   $('#modal').classList.remove('oculto');
+  $('#dica')?.classList.remove('on');   // a dica do gráfico ficava flutuando por cima do modal
   setTimeout(() => $('#modal-corpo input:not([type=hidden])')?.focus(), 60);
 }
 function fecharModal() { $('#modal').classList.add('oculto'); $('#modal-corpo').innerHTML = ''; }
@@ -521,7 +522,8 @@ telas.comissoes = async () => {
   const d = await get('/comissoes?' + par);
   const r = d.resumo;
 
-  acoes(`<button class="btn btn-verde" id="btn-marcar">Marcar selecionadas como recebidas</button>
+  acoes(`<button class="btn" id="btn-acerto">Acerto por marca (PDF)</button>
+         <button class="btn btn-verde" id="btn-marcar">Marcar selecionadas como recebidas</button>
          <button class="btn" id="btn-desmarcar">Voltar para pendente</button>`);
 
   pintar(`
@@ -601,6 +603,46 @@ telas.comissoes = async () => {
   };
   $('#btn-marcar').addEventListener('click', () => marcar('recebida'));
   $('#btn-desmarcar').addEventListener('click', () => marcar('pendente'));
+
+  /* ---- acerto: o PDF de cobrança que vai para cada representada ---- */
+  $('#btn-acerto').addEventListener('click', async () => {
+    const d1 = $('#f-de').value, d2 = $('#f-ate').value;
+    if (!d1 || !d2) return erro('Preencha as datas De e Até antes de gerar o acerto.');
+    let a;
+    try { a = await get(`/comissoes/acerto?de=${d1}&ate=${d2}`); } catch (e) { return erro(e); }
+
+    if (!a.representadas.length) {
+      return abrirModal(`<h3>Acerto de comissão</h3>
+        <div class="modal-corpo">
+          <div class="vazio"><b>Nada a receber em ${esc(a.periodo.rotulo)}</b>
+            Nenhuma comissão pendente neste período. Pode ser que já estejam marcadas como
+            recebidas, ou que as datas do filtro não peguem os pedidos certos.</div>
+          <div class="modal-acoes"><button class="btn" onclick="window.__fechar()">Fechar</button></div>
+        </div>`);
+    }
+
+    const base = `de=${encodeURIComponent(d1)}&ate=${encodeURIComponent(d2)}`;
+    abrirModal(`<h3>Acerto de comissão — ${esc(a.periodo.rotulo)}</h3>
+      <div class="modal-corpo">
+        <p class="modal-sub">Um PDF por representada, com os pedidos listados um a um, para você
+          mandar para a empresa pagar. Entra só o que está <b>a receber</b> — gerar o acerto
+          não marca nada como recebido.</p>
+        <div class="acerto-lista">
+          ${a.representadas.map(r => `<div class="acerto-item">
+            <div class="acerto-nome"><b>${esc(r.nome)}</b>
+              <small>${r.qtd} pedido(s) • ${dataBR(r.primeiro)} a ${dataBR(r.ultimo)}</small></div>
+            <div class="acerto-val mono">${dinheiro(r.comissao)}</div>
+            <a class="btn btn-peq btn-primario" href="/api/comissoes/acerto/${r.representada_id}/pdf?${base}"
+              target="_blank" rel="noopener">Gerar acerto</a>
+          </div>`).join('')}
+          <div class="acerto-item acerto-total">
+            <div class="acerto-nome"><b>Total a receber</b></div>
+            <div class="acerto-val mono">${dinheiro(a.total)}</div>
+          </div>
+        </div>
+        <div class="modal-acoes"><button class="btn" onclick="window.__fechar()">Fechar</button></div>
+      </div>`);
+  });
 };
 
 /* =========================================================================
