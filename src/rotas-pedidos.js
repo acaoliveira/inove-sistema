@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { db, config, DATA_DIR } = require('./db');
-const { gerarPedidoPDF, gerarCatalogoPDF, brl, dataBR, formatarCNPJ } = require('./pdf');
+const { gerarPedidoPDF, gerarCatalogoPDF, gerarAcertoPDF, brl, dataBR, formatarCNPJ } = require('./pdf');
 
 function lerLogo() {
   const nome = config('logo_arquivo');
@@ -227,7 +227,7 @@ module.exports = function (rota, ErroApi) {
       cond.push(`IFNULL(p.comissao_status,'pendente') = ?`); args.push(query.status);
     }
     const onde = cond.join(' AND ');
-    const lista = db.prepare(`SELECT p.id, p.numero, p.data_emissao, p.status, p.total,
+    const lista = db.prepare(`SELECT p.id, p.numero, p.data_emissao, p.status, p.total, p.representada_id,
         p.comissao_pct, p.comissao_valor, IFNULL(p.comissao_status,'pendente') AS comissao_status,
         p.comissao_recebida_em, c.razao_social AS cliente_nome, r.nome AS representada_nome,
         r.comissao_pct AS comissao_pct_representada
@@ -247,6 +247,90 @@ module.exports = function (rota, ErroApi) {
         total: pend.v + receb.v, qtd_total: pend.q + receb.q,
       },
     };
+  });
+
+  // ----------------------------------------------------- acerto de comissão
+  // O acerto é o documento que o representante manda para a representada:
+  // "estes pedidos eu vendi, esta comissão vocês ainda me devem". Por isso entra
+  // SÓ o que está pendente — o que já foi pago não é mais cobrança.
+  const MES_LONGO = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+    'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+
+  /** "Outubro/2026" quando o período é um mês fechado; senão "01/10/2026 a 20/10/2026" */
+  function rotuloPeriodo(de, ate) {
+    if (!de || !ate) return de ? `a partir de ${dataBR(de)}` : (ate ? `até ${dataBR(ate)}` : 'todo o período');
+    const [a1, m1, d1] = de.split('-').map(Number);
+    const [a2, m2, d2] = ate.split('-').map(Number);
+    const ultimo = new Date(a2, m2, 0).getDate();
+    if (a1 === a2 && m1 === m2 && d1 === 1 && d2 === ultimo) {
+      const nome = MES_LONGO[m1 - 1];
+      return nome.charAt(0).toUpperCase() + nome.slice(1) + '/' + a1;
+    }
+    return `${dataBR(de)} a ${dataBR(ate)}`;
+  }
+
+  /** Condição comum: pedido válido, comissão pendente e com valor */
+  function ondePendente(query) {
+    const cond = [`p.tipo = 'pedido'`, `p.status <> 'cancelado'`,
+      `IFNULL(p.comissao_status,'pendente') = 'pendente'`, `IFNULL(p.comissao_valor,0) > 0`];
+    const args = [];
+    if (query.de) { cond.push('p.data_emissao >= ?'); args.push(query.de); }
+    if (query.ate) { cond.push('p.data_emissao <= ?'); args.push(query.ate); }
+    return { onde: cond.join(' AND '), args };
+  }
+
+  /** Representadas que têm comissão a receber no período — alimenta a lista de acertos */
+  rota.get('/api/comissoes/acerto', ({ query }) => {
+    const { onde, args } = ondePendente(query);
+    const linhas = db.prepare(`SELECT r.id AS representada_id, r.nome,
+        COUNT(*) AS qtd, IFNULL(SUM(p.total),0) AS base, IFNULL(SUM(p.comissao_valor),0) AS comissao,
+        MIN(p.data_emissao) AS primeiro, MAX(p.data_emissao) AS ultimo
+      FROM pedidos p JOIN representadas r ON r.id = p.representada_id
+      WHERE ${onde} GROUP BY r.id, r.nome ORDER BY r.nome`).all(...args);
+    return {
+      periodo: { de: query.de || '', ate: query.ate || '', rotulo: rotuloPeriodo(query.de, query.ate) },
+      representadas: linhas,
+      total: linhas.reduce((s, l) => s + l.comissao, 0),
+    };
+  });
+
+  /** PDF do acerto de uma representada. Só emite o documento: não marca nada como recebido. */
+  rota.get('/api/comissoes/acerto/:id/pdf', ({ params, query, res }) => {
+    const representada = db.prepare('SELECT * FROM representadas WHERE id = ?').get(Number(params.id));
+    if (!representada) throw new ErroApi('Representada não encontrada.', 404);
+
+    const { onde, args } = ondePendente(query);
+    const pedidos = db.prepare(`SELECT p.numero, p.data_emissao, p.total, p.comissao_valor,
+        IFNULL(p.comissao_pct, r.comissao_pct) AS pct, c.razao_social AS cliente_nome
+      FROM pedidos p
+      JOIN clientes c ON c.id = p.cliente_id
+      JOIN representadas r ON r.id = p.representada_id
+      WHERE ${onde} AND p.representada_id = ?
+      ORDER BY p.data_emissao, p.id`).all(...args, representada.id);
+
+    if (!pedidos.length) {
+      throw new ErroApi(`Não há comissão a receber de ${representada.nome} neste período. ` +
+        'Confira as datas, ou veja se essas comissões já foram marcadas como recebidas.', 400);
+    }
+
+    const totais = {
+      qtd: pedidos.length,
+      base: pedidos.reduce((s, p) => s + Number(p.total || 0), 0),
+      comissao: pedidos.reduce((s, p) => s + Number(p.comissao_valor || 0), 0),
+    };
+    const pdf = gerarAcertoPDF({
+      empresa: Object.fromEntries(db.prepare('SELECT chave, valor FROM config').all().map(r => [r.chave, r.valor])),
+      logo: lerLogo(),
+      representada,
+      periodo: { de: query.de || '', ate: query.ate || '', rotulo: rotuloPeriodo(query.de, query.ate) },
+      pedidos, totais,
+    });
+    const nome = `acerto-${String(representada.nome).replace(/[^\w]/g, '-').toLowerCase()}-${query.de || ''}.pdf`;
+    res.writeHead(200, {
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `${query.download ? 'attachment' : 'inline'}; filename="${nome.replace(/[^\x20-\x7e]/g, '_')}"`,
+    });
+    res.end(pdf);
   });
 
   // ---- cotação vira pedido

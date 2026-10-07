@@ -563,4 +563,152 @@ function gerarRelatorioPDF(d) {
   return doc.gerar();
 }
 
-module.exports = { gerarPedidoPDF, gerarCatalogoPDF, gerarRelatorioPDF, formatarCNPJ, brl, dataBR };
+/**
+ * Acerto de comissão: o documento que o representante manda para a representada
+ * dizendo quanto tem a receber. Lista pedido a pedido para a empresa conferir
+ * antes de pagar.
+ *
+ * @param {object} d { empresa, logo, representada, periodo, pedidos, totais }
+ */
+function gerarAcertoPDF(d) {
+  const { empresa, representada, periodo, pedidos, totais } = d;
+  const doc = new Doc();
+  const M = 36;
+  const LU = LARGURA - 2 * M;
+  let logo = null;
+  if (d.logo) { try { logo = lerImagem(d.logo); } catch { logo = null; } }
+
+  const cabecalho = () => {
+    if (logo) {
+      const altMax = 40, largMax = 200;
+      let h = altMax, w = (logo.largura / logo.altura) * h;
+      if (w > largMax) { w = largMax; h = (logo.altura / logo.largura) * w; }
+      doc.imagem(logo, M, 14 + (altMax - h) / 2, w, h);
+    } else {
+      doc.texto(M, 38, empresa.empresa_nome || 'Representação Comercial', { tam: 14, bold: true, cor: CARVAO, max: 300 });
+    }
+    doc.texto(LARGURA - M, 28, 'ACERTO DE COMISSÃO', { tam: 11.5, bold: true, align: 'right', cor: CARVAO });
+    doc.texto(LARGURA - M, 44, representada.nome, { tam: 10, bold: true, align: 'right', cor: CARVAO, max: 300 });
+    doc.texto(LARGURA - M, 58, periodo.rotulo, { tam: 7.5, align: 'right', cor: SUAVE });
+    doc.retangulo(M, 68, LU, 2.2, CARVAO);
+  };
+
+  let y = 0;
+  const espaco = (altura) => { if (y + altura > ALTURA - 60) { doc.novaPagina(); cabecalho(); y = 84; } };
+
+  const titulo = (txt) => {
+    espaco(40);
+    y += 6;
+    doc.retangulo(M, y, LU, 15, CINZA);
+    doc.texto(M + 7, y + 10.5, txt, { tam: 8, bold: true, cor: CARVAO });
+    y += 15;
+  };
+
+  const tabela = (colunas, linhas, rodape) => {
+    const posX = [];
+    let acc = M;
+    for (const c of colunas) { posX.push(c.a === 'right' ? acc + c.l - 6 : acc + 6); acc += c.l; }
+
+    // O acerto costuma passar de uma página. O cabeçalho da tabela repete em
+    // todas elas: quem confere do outro lado precisa saber de que coluna é cada
+    // número, mesmo na última folha.
+    const cabecalhoTabela = () => {
+      doc.retangulo(M, y, LU, 14, [1, 1, 1]);
+      colunas.forEach((c, i) => doc.texto(posX[i], y + 9.5, c.t, { tam: 7, bold: true, cor: SUAVE, align: c.a }));
+      doc.linha(M, y + 14, LARGURA - M, y + 14, [0.8, 0.8, 0.83]);
+      y += 14;
+    };
+    const cabeNaPagina = (altura) => {
+      if (y + altura <= ALTURA - 60) return;
+      doc.novaPagina(); cabecalho(); y = 84; cabecalhoTabela();
+    };
+
+    espaco(28);
+    cabecalhoTabela();
+    let zebra = false;
+    for (const l of linhas) {
+      cabeNaPagina(16);
+      if (zebra) doc.retangulo(M, y, LU, 14, [0.975, 0.975, 0.98]);
+      zebra = !zebra;
+      colunas.forEach((c, i) => doc.texto(posX[i], y + 9.5, l[i], { tam: 8, align: c.a, max: c.l - 12 }));
+      y += 14;
+    }
+    if (rodape) {
+      cabeNaPagina(18);
+      doc.linha(M, y, LARGURA - M, y, [0.8, 0.8, 0.83]);
+      colunas.forEach((c, i) => doc.texto(posX[i], y + 11, rodape[i], { tam: 8.5, bold: true, align: c.a, max: c.l - 12 }));
+      y += 17;
+    }
+    y += 4;
+  };
+
+  cabecalho();
+  y = 84;
+
+  // ---- quem cobra de quem
+  const de = [
+    empresa.empresa_cnpj && 'CNPJ ' + formatarCNPJ(empresa.empresa_cnpj),
+    empresa.empresa_telefone, empresa.empresa_email,
+  ].filter(Boolean).join('   •   ');
+  const para = [representada.cnpj && 'CNPJ ' + formatarCNPJ(representada.cnpj), representada.telefone,
+    representada.email].filter(Boolean).join('   •   ');
+  const meia = (LU - 10) / 2;
+  [['DE (representante)', empresa.empresa_nome || '-', de, M],
+   ['PARA (representada)', representada.nome, para, M + meia + 10]].forEach(([rot, nome, sub, x]) => {
+    doc.retangulo(x, y, meia, 46, [0.975, 0.975, 0.98]);
+    doc.texto(x + 8, y + 14, rot, { tam: 6.5, bold: true, cor: SUAVE });
+    doc.texto(x + 8, y + 28, nome, { tam: 9.5, bold: true, cor: CARVAO, max: meia - 16 });
+    if (sub) doc.texto(x + 8, y + 39, sub, { tam: 6.5, cor: SUAVE, max: meia - 16 });
+  });
+  y += 56;
+
+  // ---- os números do acerto
+  const cartoes = [
+    ['Pedidos no acerto', String(totais.qtd)],
+    ['Base de cálculo', 'R$ ' + brl(totais.base)],
+    ['Comissão a receber', 'R$ ' + brl(totais.comissao)],
+  ];
+  const lc = (LU - 2 * 8) / 3;
+  cartoes.forEach(([rot, val], i) => {
+    const x = M + i * (lc + 8);
+    const destaque = i === 2;
+    doc.retangulo(x, y, lc, 50, destaque ? CARVAO : [0.975, 0.975, 0.98]);
+    doc.texto(x + 10, y + 17, rot.toUpperCase(), { tam: 6.5, bold: true, cor: destaque ? [0.8, 0.8, 0.83] : SUAVE });
+    doc.texto(x + 10, y + 38, val, { tam: 14, bold: true, cor: destaque ? [1, 1, 1] : CARVAO, max: lc - 18 });
+  });
+  y += 60;
+
+  titulo('PEDIDOS QUE COMPÕEM ESTE ACERTO');
+  tabela(
+    // a coluna Data precisa caber "00/00/0000" inteiro: 40pt de texto + 12 de folga
+    [{ t: 'Pedido', l: 78 }, { t: 'Data', l: 58 }, { t: 'Cliente', l: 179.28 },
+     { t: 'Valor do pedido', l: 86, a: 'right' }, { t: '%', l: 40, a: 'right' }, { t: 'Comissão', l: 82, a: 'right' }],
+    pedidos.map(p => [p.numero, dataBR(p.data_emissao), p.cliente_nome,
+      'R$ ' + brl(p.total), brl(p.pct) + '%', 'R$ ' + brl(p.comissao_valor)]),
+    ['TOTAL', '', `${totais.qtd} pedido(s)`, 'R$ ' + brl(totais.base), '', 'R$ ' + brl(totais.comissao)]
+  );
+
+  // ---- fecho
+  espaco(60);
+  y += 8;
+  doc.retangulo(M, y, LU, 34, CINZA);
+  doc.texto(M + 10, y + 14, 'VALOR TOTAL A RECEBER', { tam: 7, bold: true, cor: SUAVE });
+  doc.texto(LARGURA - M - 10, y + 24, 'R$ ' + brl(totais.comissao), { tam: 15, bold: true, align: 'right', cor: CARVAO });
+  y += 44;
+  doc.texto(M, y, 'Comissões referentes aos pedidos acima, ainda não recebidas até a data de emissão deste documento.',
+    { tam: 7.5, cor: SUAVE });
+
+  const total = doc.paginas.length;
+  doc.paginas.forEach((pag, idx) => {
+    const antes = doc.buf; doc.buf = pag;
+    doc.linha(M, ALTURA - 40, LARGURA - M, ALTURA - 40);
+    doc.texto(M, ALTURA - 28, [empresa.empresa_nome, empresa.empresa_telefone].filter(Boolean).join('  •  '), { tam: 7, cor: SUAVE });
+    doc.texto(LARGURA - M, ALTURA - 28, `Emitido em ${new Date().toLocaleString('pt-BR')}  •  página ${idx + 1} de ${total}`,
+      { tam: 7, align: 'right', cor: SUAVE });
+    doc.buf = antes;
+  });
+
+  return doc.gerar();
+}
+
+module.exports = { gerarPedidoPDF, gerarCatalogoPDF, gerarRelatorioPDF, gerarAcertoPDF, formatarCNPJ, brl, dataBR };
