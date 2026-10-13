@@ -572,6 +572,11 @@ function gerarRelatorioPDF(d) {
  */
 function gerarAcertoPDF(d) {
   const { empresa, representada, periodo, pedidos, totais } = d;
+  const devolucoes = d.devolucoes || [];
+  const temDev = devolucoes.length > 0;
+  const aReceber = temDev ? totais.liquido : totais.comissao;
+  // negativo em documento de cobrança se escreve "- R$ 48,00", não "R$ -48,00"
+  const dinBR = (v) => (v < 0 ? '- R$ ' + brl(Math.abs(v)) : 'R$ ' + brl(v));
   const doc = new Doc();
   const M = 36;
   const LU = LARGURA - 2 * M;
@@ -666,37 +671,73 @@ function gerarAcertoPDF(d) {
   const cartoes = [
     ['Pedidos no acerto', String(totais.qtd)],
     ['Base de cálculo', 'R$ ' + brl(totais.base)],
-    ['Comissão a receber', 'R$ ' + brl(totais.comissao)],
+    ...(temDev ? [['(-) Devoluções', 'R$ ' + brl(totais.estorno)]] : []),
+    [temDev ? 'Líquido a receber' : 'Comissão a receber', dinBR(aReceber)],
   ];
-  const lc = (LU - 2 * 8) / 3;
+  const lc = (LU - (cartoes.length - 1) * 8) / cartoes.length;
   cartoes.forEach(([rot, val], i) => {
     const x = M + i * (lc + 8);
-    const destaque = i === 2;
+    const destaque = i === cartoes.length - 1;
     doc.retangulo(x, y, lc, 50, destaque ? CARVAO : [0.975, 0.975, 0.98]);
     doc.texto(x + 10, y + 17, rot.toUpperCase(), { tam: 6.5, bold: true, cor: destaque ? [0.8, 0.8, 0.83] : SUAVE });
-    doc.texto(x + 10, y + 38, val, { tam: 14, bold: true, cor: destaque ? [1, 1, 1] : CARVAO, max: lc - 18 });
+    doc.texto(x + 10, y + 38, val, { tam: temDev ? 12.5 : 14, bold: true,
+      cor: destaque ? [1, 1, 1] : CARVAO, max: lc - 18 });
   });
   y += 60;
 
-  titulo('PEDIDOS QUE COMPÕEM ESTE ACERTO');
-  tabela(
-    // a coluna Data precisa caber "00/00/0000" inteiro: 40pt de texto + 12 de folga
-    [{ t: 'Pedido', l: 78 }, { t: 'Data', l: 58 }, { t: 'Cliente', l: 179.28 },
-     { t: 'Valor do pedido', l: 86, a: 'right' }, { t: '%', l: 40, a: 'right' }, { t: 'Comissão', l: 82, a: 'right' }],
-    pedidos.map(p => [p.numero, dataBR(p.data_emissao), p.cliente_nome,
-      'R$ ' + brl(p.total), brl(p.pct) + '%', 'R$ ' + brl(p.comissao_valor)]),
-    ['TOTAL', '', `${totais.qtd} pedido(s)`, 'R$ ' + brl(totais.base), '', 'R$ ' + brl(totais.comissao)]
-  );
+  if (pedidos.length) {
+    titulo('PEDIDOS QUE COMPÕEM ESTE ACERTO');
+    tabela(
+      // a coluna Data precisa caber "00/00/0000" inteiro: 40pt de texto + 12 de folga
+      [{ t: 'Pedido', l: 78 }, { t: 'Data', l: 58 }, { t: 'Cliente', l: 179.28 },
+       { t: 'Valor do pedido', l: 86, a: 'right' }, { t: '%', l: 40, a: 'right' }, { t: 'Comissão', l: 82, a: 'right' }],
+      pedidos.map(p => [p.numero, dataBR(p.data_emissao), p.cliente_nome,
+        'R$ ' + brl(p.total), brl(p.pct) + '%', 'R$ ' + brl(p.comissao_valor)]),
+      ['TOTAL', '', `${totais.qtd} pedido(s)`, 'R$ ' + brl(totais.base), '', 'R$ ' + brl(totais.comissao)]
+    );
+  }
+
+  if (temDev) {
+    titulo('DEVOLUÇÕES NO PERÍODO (ABATIDAS DA COMISSÃO)');
+    tabela(
+      [{ t: 'Data', l: 58 }, { t: 'Pedido', l: 78 }, { t: 'Cliente', l: 179.28 },
+       { t: 'Mercadoria devolvida', l: 86, a: 'right' }, { t: '%', l: 40, a: 'right' }, { t: 'Estorno', l: 82, a: 'right' }],
+      devolucoes.map(v => [dataBR(v.data), v.numero, v.cliente_nome,
+        'R$ ' + brl(v.valor), brl(v.comissao_pct) + '%', '- R$ ' + brl(v.comissao_estorno)]),
+      ['TOTAL', '', `${totais.qtd_devolucoes} devolução(ões)`, 'R$ ' + brl(totais.devolucao_valor), '',
+        '- R$ ' + brl(totais.estorno)]
+    );
+  }
 
   // ---- fecho
-  espaco(60);
+  espaco(temDev ? 88 : 60);
   y += 8;
+  if (temDev) {
+    // a conta aberta, para a empresa conferir de onde saiu o líquido
+    [['Comissão dos pedidos', 'R$ ' + brl(totais.comissao)],
+     ['(-) Estorno das devoluções', '- R$ ' + brl(totais.estorno)]].forEach(([rot, val]) => {
+      doc.texto(M + 10, y + 10, rot, { tam: 8.5, cor: SUAVE });
+      doc.texto(LARGURA - M - 10, y + 10, val, { tam: 8.5, align: 'right', cor: CARVAO });
+      y += 15;
+    });
+    doc.linha(M + 10, y, LARGURA - M - 10, y, [0.8, 0.8, 0.83]);
+    y += 4;
+  }
   doc.retangulo(M, y, LU, 34, CINZA);
   doc.texto(M + 10, y + 14, 'VALOR TOTAL A RECEBER', { tam: 7, bold: true, cor: SUAVE });
-  doc.texto(LARGURA - M - 10, y + 24, 'R$ ' + brl(totais.comissao), { tam: 15, bold: true, align: 'right', cor: CARVAO });
+  doc.texto(LARGURA - M - 10, y + 24, dinBR(aReceber), { tam: 15, bold: true, align: 'right', cor: CARVAO });
   y += 44;
-  doc.texto(M, y, 'Comissões referentes aos pedidos acima, ainda não recebidas até a data de emissão deste documento.',
+  doc.texto(M, y, !pedidos.length
+    ? 'Não há comissão a receber neste período: o documento traz apenas as devoluções lançadas.'
+    : (temDev
+      ? 'Comissões dos pedidos acima, ainda não recebidas, já descontadas as devoluções lançadas no período.'
+      : 'Comissões referentes aos pedidos acima, ainda não recebidas até a data de emissão deste documento.'),
     { tam: 7.5, cor: SUAVE });
+  if (aReceber < 0) {
+    y += 12;
+    doc.texto(M, y, 'Saldo negativo: as devoluções do período passaram da comissão dos pedidos. ' +
+      'A diferença fica para abater no próximo acerto.', { tam: 7.5, cor: SUAVE });
+  }
 
   const total = doc.paginas.length;
   doc.paginas.forEach((pag, idx) => {

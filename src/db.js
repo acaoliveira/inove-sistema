@@ -186,6 +186,23 @@ CREATE TABLE IF NOT EXISTS historico_vendas (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hist_unico
   ON historico_vendas(ano, mes, IFNULL(representada_id,0));
 
+-- Mercadoria que o cliente devolveu depois do pedido faturado. Não altera o
+-- pedido: fica ao lado dele, estornando só a comissão. A % é congelada no
+-- lançamento, senão mudar a % do pedido depois mexeria num estorno já acertado.
+CREATE TABLE IF NOT EXISTS devolucoes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pedido_id INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
+  data TEXT NOT NULL,                         -- quando a devolução aconteceu
+  valor REAL NOT NULL DEFAULT 0,              -- mercadoria devolvida, em R$
+  comissao_pct REAL NOT NULL DEFAULT 0,       -- % usada no estorno
+  comissao_estorno REAL NOT NULL DEFAULT 0,   -- quanto sai da comissão
+  motivo TEXT DEFAULT '',
+  usuario_id INTEGER REFERENCES usuarios(id),
+  criado_em TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_devolucoes_pedido ON devolucoes(pedido_id);
+CREATE INDEX IF NOT EXISTS idx_devolucoes_data ON devolucoes(data);
+
 CREATE TABLE IF NOT EXISTS config (
   chave TEXT PRIMARY KEY,
   valor TEXT NOT NULL DEFAULT ''

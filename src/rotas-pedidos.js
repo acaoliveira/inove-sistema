@@ -249,6 +249,76 @@ module.exports = function (rota, ErroApi) {
     };
   });
 
+  // ------------------------------------------------------------- devoluções
+  // O cliente devolveu mercadoria depois do pedido faturado. O pedido continua
+  // como está — quem muda é só a comissão, que leva o estorno.
+
+  /** % que vale para o pedido: a do próprio pedido, senão a da representada */
+  function pctDoPedido(p) {
+    if (p.comissao_pct !== null && p.comissao_pct !== undefined) return Number(p.comissao_pct);
+    const r = db.prepare('SELECT comissao_pct FROM representadas WHERE id = ?').get(p.representada_id);
+    return Number(r?.comissao_pct || 0);
+  }
+
+  const SQL_DEVOLUCOES = `SELECT d.*, p.numero, p.total AS pedido_total, p.data_emissao,
+      p.representada_id, c.razao_social AS cliente_nome, r.nome AS representada_nome
+    FROM devolucoes d
+    JOIN pedidos p ON p.id = d.pedido_id
+    JOIN clientes c ON c.id = p.cliente_id
+    JOIN representadas r ON r.id = p.representada_id`;
+
+  rota.get('/api/devolucoes', ({ query }) => {
+    const cond = [], args = [];
+    if (query.pedido_id) { cond.push('d.pedido_id = ?'); args.push(Number(query.pedido_id)); }
+    if (query.de) { cond.push('d.data >= ?'); args.push(query.de); }
+    if (query.ate) { cond.push('d.data <= ?'); args.push(query.ate); }
+    if (query.representada_id) { cond.push('p.representada_id = ?'); args.push(Number(query.representada_id)); }
+    const lista = db.prepare(`${SQL_DEVOLUCOES}
+      ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''}
+      ORDER BY d.data DESC, d.id DESC LIMIT ${Number(query.limite || 300)}`).all(...args);
+    return {
+      lista,
+      resumo: {
+        qtd: lista.length,
+        valor: lista.reduce((s, d) => s + Number(d.valor || 0), 0),
+        estorno: lista.reduce((s, d) => s + Number(d.comissao_estorno || 0), 0),
+      },
+    };
+  });
+
+  rota.post('/api/devolucoes', ({ corpo, usuario }) => {
+    const pedido = db.prepare('SELECT * FROM pedidos WHERE id = ?').get(Number(corpo.pedido_id));
+    if (!pedido) throw new ErroApi('Escolha o pedido que teve a devolução.');
+    if (pedido.tipo !== 'pedido') throw new ErroApi('Cotação não tem devolução. Converta em pedido primeiro.');
+    if (pedido.status === 'cancelado') throw new ErroApi('Este pedido está cancelado — não há o que devolver.');
+
+    const valor = Number(corpo.valor || 0);
+    if (!(valor > 0)) throw new ErroApi('Informe o valor da mercadoria devolvida.');
+
+    const jaDevolvido = db.prepare('SELECT IFNULL(SUM(valor),0) v FROM devolucoes WHERE pedido_id = ?').get(pedido.id).v;
+    if (jaDevolvido + valor > Number(pedido.total) + 0.005) {
+      throw new ErroApi(`O pedido ${pedido.numero} é de ${brl(pedido.total)} e já tem ${brl(jaDevolvido)} ` +
+        `devolvido. Com mais ${brl(valor)} a devolução passaria do valor do pedido. ` +
+        `Cabe no máximo ${brl(Number(pedido.total) - jaDevolvido)}.`);
+    }
+
+    const pct = pctDoPedido(pedido);
+    const estorno = Math.round(valor * pct) / 100;
+    const r = db.prepare(`INSERT INTO devolucoes
+        (pedido_id, data, valor, comissao_pct, comissao_estorno, motivo, usuario_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(pedido.id, String(corpo.data || hojeData()), valor, pct, estorno,
+        String(corpo.motivo || '').trim(), usuario?.id || null);
+    return db.prepare(`${SQL_DEVOLUCOES} WHERE d.id = ?`).get(Number(r.lastInsertRowid));
+  });
+
+  rota.del('/api/devolucoes/:id', ({ params }) => {
+    const d = db.prepare('SELECT * FROM devolucoes WHERE id = ?').get(Number(params.id));
+    if (!d) throw new ErroApi('Devolução não encontrada.', 404);
+    db.prepare('DELETE FROM devolucoes WHERE id = ?').run(d.id);
+    return { ok: true, estornado: d.comissao_estorno };
+  });
+
   // ----------------------------------------------------- acerto de comissão
   // O acerto é o documento que o representante manda para a representada:
   // "estes pedidos eu vendi, esta comissão vocês ainda me devem". Por isso entra
@@ -279,6 +349,25 @@ module.exports = function (rota, ErroApi) {
     return { onde: cond.join(' AND '), args };
   }
 
+  /**
+   * Devoluções que caem num acerto. O recorte é a DATA DA DEVOLUÇÃO, não a do
+   * pedido: devolução lançada em outubro abate no acerto de outubro, mesmo que
+   * o pedido seja de setembro e aquela comissão já tenha sido paga.
+   */
+  function devolucoesDoPeriodo(query, representadaId) {
+    const cond = [], args = [];
+    if (query.de) { cond.push('d.data >= ?'); args.push(query.de); }
+    if (query.ate) { cond.push('d.data <= ?'); args.push(query.ate); }
+    if (representadaId) { cond.push('p.representada_id = ?'); args.push(Number(representadaId)); }
+    return db.prepare(`SELECT d.id, d.data, d.valor, d.comissao_pct, d.comissao_estorno, d.motivo,
+        p.numero, p.representada_id, c.razao_social AS cliente_nome
+      FROM devolucoes d
+      JOIN pedidos p ON p.id = d.pedido_id
+      JOIN clientes c ON c.id = p.cliente_id
+      ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''}
+      ORDER BY d.data, d.id`).all(...args);
+  }
+
   /** Representadas que têm comissão a receber no período — alimenta a lista de acertos */
   rota.get('/api/comissoes/acerto', ({ query }) => {
     const { onde, args } = ondePendente(query);
@@ -287,10 +376,35 @@ module.exports = function (rota, ErroApi) {
         MIN(p.data_emissao) AS primeiro, MAX(p.data_emissao) AS ultimo
       FROM pedidos p JOIN representadas r ON r.id = p.representada_id
       WHERE ${onde} GROUP BY r.id, r.nome ORDER BY r.nome`).all(...args);
+
+    // Uma representada pode ter devolução no período e nenhum pedido pendente:
+    // ela precisa aparecer na lista mesmo assim, com saldo negativo.
+    const devs = devolucoesDoPeriodo(query, null);
+    const porRep = new Map(linhas.map(l => [l.representada_id, l]));
+    for (const d of devs) {
+      let l = porRep.get(d.representada_id);
+      if (!l) {
+        const r = db.prepare('SELECT nome FROM representadas WHERE id = ?').get(d.representada_id);
+        l = { representada_id: d.representada_id, nome: r?.nome || '(representada removida)',
+          qtd: 0, base: 0, comissao: 0, primeiro: d.data, ultimo: d.data };
+        porRep.set(d.representada_id, l);
+      }
+      l.qtd_devolucoes = (l.qtd_devolucoes || 0) + 1;
+      l.devolucao_valor = (l.devolucao_valor || 0) + Number(d.valor || 0);
+      l.devolucao_estorno = (l.devolucao_estorno || 0) + Number(d.comissao_estorno || 0);
+    }
+    const representadas = [...porRep.values()]
+      .map(l => ({ ...l, qtd_devolucoes: l.qtd_devolucoes || 0,
+        devolucao_valor: l.devolucao_valor || 0, devolucao_estorno: l.devolucao_estorno || 0,
+        liquido: l.comissao - (l.devolucao_estorno || 0) }))
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
     return {
       periodo: { de: query.de || '', ate: query.ate || '', rotulo: rotuloPeriodo(query.de, query.ate) },
-      representadas: linhas,
-      total: linhas.reduce((s, l) => s + l.comissao, 0),
+      representadas,
+      total: representadas.reduce((s, l) => s + l.comissao, 0),
+      total_devolucoes: representadas.reduce((s, l) => s + l.devolucao_estorno, 0),
+      total_liquido: representadas.reduce((s, l) => s + l.liquido, 0),
     };
   });
 
@@ -308,22 +422,32 @@ module.exports = function (rota, ErroApi) {
       WHERE ${onde} AND p.representada_id = ?
       ORDER BY p.data_emissao, p.id`).all(...args, representada.id);
 
-    if (!pedidos.length) {
+    // o abatimento é opcional: quem gera o acerto decide se entra ou não
+    const abater = query.devolucoes === '1';
+    const devolucoes = abater ? devolucoesDoPeriodo(query, representada.id) : [];
+
+    if (!pedidos.length && !devolucoes.length) {
       throw new ErroApi(`Não há comissão a receber de ${representada.nome} neste período. ` +
         'Confira as datas, ou veja se essas comissões já foram marcadas como recebidas.', 400);
     }
 
+    const comissao = pedidos.reduce((s, p) => s + Number(p.comissao_valor || 0), 0);
+    const estorno = devolucoes.reduce((s, d) => s + Number(d.comissao_estorno || 0), 0);
     const totais = {
       qtd: pedidos.length,
       base: pedidos.reduce((s, p) => s + Number(p.total || 0), 0),
-      comissao: pedidos.reduce((s, p) => s + Number(p.comissao_valor || 0), 0),
+      comissao,
+      qtd_devolucoes: devolucoes.length,
+      devolucao_valor: devolucoes.reduce((s, d) => s + Number(d.valor || 0), 0),
+      estorno,
+      liquido: comissao - estorno,
     };
     const pdf = gerarAcertoPDF({
       empresa: Object.fromEntries(db.prepare('SELECT chave, valor FROM config').all().map(r => [r.chave, r.valor])),
       logo: lerLogo(),
       representada,
       periodo: { de: query.de || '', ate: query.ate || '', rotulo: rotuloPeriodo(query.de, query.ate) },
-      pedidos, totais,
+      pedidos, devolucoes, totais,
     });
     const nome = `acerto-${String(representada.nome).replace(/[^\w]/g, '-').toLowerCase()}-${query.de || ''}.pdf`;
     res.writeHead(200, {
