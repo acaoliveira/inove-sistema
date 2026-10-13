@@ -503,6 +503,93 @@ telas.painel = async () => {
 };
 
 /* =========================================================================
+   DEVOLUÇÕES — mercadoria que voltou depois do pedido faturado
+   ========================================================================= */
+/**
+ * Abre o lançamento de devolução. Com `pedido` já definido vai direto ao
+ * formulário; sem ele, primeiro procura o pedido pelo número ou pelo cliente.
+ * `aoGravar` é chamado depois que a devolução entra.
+ */
+async function lancarDevolucao(pedido, aoGravar) {
+  /** % que vale para o pedido: a dele, senão a da representada */
+  const pctDo = (p) => (p.comissao_pct != null ? n(p.comissao_pct)
+    : n(estado.representadas.find(r => r.id === p.representada_id)?.comissao_pct));
+
+  const formulario = (p) => {
+    const pc = pctDo(p);
+    abrirModal(`<h3>Lançar devolução</h3>
+      <div class="modal-corpo">
+        <div class="info-linha">Pedido <b>${esc(p.numero)}</b> — ${esc(p.cliente_nome)}<br>
+          Valor do pedido ${dinheiro(p.total)} • comissão de <b>${pct(pc)}</b></div>
+        <div class="grade g3">
+          <label class="campo">Data da devolução
+            <input type="date" id="dv-data" value="${hojeISO()}"></label>
+          <label class="campo">Mercadoria devolvida (R$)
+            <input type="text" inputmode="decimal" id="dv-valor" placeholder="0,00"></label>
+          <label class="campo">Estorno da comissão
+            <input type="text" id="dv-estorno" value="R$ 0,00" readonly></label>
+        </div>
+        <label class="campo">Motivo (opcional)
+          <input type="text" id="dv-motivo" placeholder="avaria no transporte, recusa do cliente…"></label>
+        <small class="ajuda">O estorno sai de ${pct(pc)} sobre o valor devolvido. O pedido não muda:
+          a devolução fica ao lado dele e abate na hora de gerar o acerto.</small>
+        <div class="modal-acoes">
+          <button class="btn" onclick="window.__fechar()">Cancelar</button>
+          <button class="btn btn-primario" id="dv-ok">Lançar devolução</button>
+        </div>
+      </div>`);
+
+    const recalcular = () => { $('#dv-estorno').value = dinheiro(numBR($('#dv-valor').value) * pc / 100); };
+    $('#dv-valor').addEventListener('input', recalcular);
+    ligarCamposBR('#dv-valor', recalcular);
+    setTimeout(() => $('#dv-valor').focus(), 80);
+
+    $('#dv-ok').addEventListener('click', async () => {
+      const valor = numBR($('#dv-valor').value);
+      if (!(valor > 0)) return erro('Informe o valor da mercadoria devolvida.');
+      try {
+        await api('POST', '/devolucoes', {
+          pedido_id: p.id, data: $('#dv-data').value, valor, motivo: $('#dv-motivo').value,
+        });
+        fecharModal();
+        ok(`Devolução lançada. Estorno de ${dinheiro(valor * pc / 100)} na comissão.`);
+        aoGravar?.();
+      } catch (e) { erro(e); }
+    });
+  };
+
+  if (pedido) return formulario(pedido);
+
+  // sem pedido definido: procura primeiro
+  abrirModal(`<h3>Devolução — qual pedido?</h3>
+    <div class="modal-corpo">
+      <label class="campo">Procure pelo número do pedido ou pelo nome do cliente
+        <input type="text" id="dv-busca" placeholder="PED-2026-0012 ou Mercado Bom Preço" autocomplete="off"></label>
+      <div class="busca-lista" id="dv-res"><div class="vazio">Digite para procurar.</div></div>
+      <div class="modal-acoes"><button class="btn" onclick="window.__fechar()">Cancelar</button></div>
+    </div>`);
+
+  let tempo;
+  const procurar = async () => {
+    const t = $('#dv-busca').value.trim();
+    if (t.length < 2) return ($('#dv-res').innerHTML = '<div class="vazio">Digite para procurar.</div>');
+    try {
+      const lista = await get(`/pedidos?tipo=pedido&busca=${encodeURIComponent(t)}&limite=20`);
+      $('#dv-res').innerHTML = lista.length
+        ? lista.map(p => `<div data-id="${p.id}"><b>${esc(p.numero)} — ${esc(p.cliente_nome)}</b>
+            <small>${dataBR(p.data_emissao)} • ${esc(p.representada_nome)} • ${dinheiro(p.total)}</small></div>`).join('')
+        : '<div class="vazio">Nenhum pedido encontrado.</div>';
+    } catch (e) { erro(e); }
+  };
+  $('#dv-busca').addEventListener('input', () => { clearTimeout(tempo); tempo = setTimeout(procurar, 300); });
+  $('#dv-res').addEventListener('click', async e => {
+    const div = e.target.closest('[data-id]'); if (!div) return;
+    try { formulario(await get('/pedidos/' + div.dataset.id)); } catch (x) { erro(x); }
+  });
+  setTimeout(() => $('#dv-busca').focus(), 80);
+}
+
+/* =========================================================================
    COMISSÕES
    ========================================================================= */
 telas.comissoes = async () => {
@@ -519,10 +606,13 @@ telas.comissoes = async () => {
   const par = new URLSearchParams({ de, ate });
   if (rep) par.set('representada_id', rep);
   if (situacao) par.set('status', situacao);
-  const d = await get('/comissoes?' + par);
+  const parDev = new URLSearchParams({ de, ate });
+  if (rep) parDev.set('representada_id', rep);
+  const [d, dev] = await Promise.all([get('/comissoes?' + par), get('/devolucoes?' + parDev)]);
   const r = d.resumo;
 
   acoes(`<button class="btn" id="btn-acerto">Acerto por marca (PDF)</button>
+         <button class="btn" id="btn-devolucao">Lançar devolução</button>
          <button class="btn btn-verde" id="btn-marcar">Marcar selecionadas como recebidas</button>
          <button class="btn" id="btn-desmarcar">Voltar para pendente</button>`);
 
@@ -581,8 +671,30 @@ telas.comissoes = async () => {
         : '<tr><td colspan="9" class="vazio"><b>Nenhum pedido no período</b>Ajuste os filtros acima.</td></tr>'}</tbody>
     </table></div></div></div>
 
+  <div class="cartao"><div class="cartao-tit">Devoluções no período
+      <span style="font-weight:400;color:var(--suave);font-size:12.5px">${dev.resumo.qtd} lançamento(s)
+        • abate ${dinheiro(dev.resumo.estorno)} de comissão</span></div>
+    <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
+      <thead><tr><th>Data</th><th>Pedido</th><th>Cliente</th><th>Representada</th><th>Motivo</th>
+        <th class="dir">Devolvido</th><th class="dir">%</th><th class="dir">Estorno</th><th style="width:44px"></th></tr></thead>
+      <tbody>${dev.lista.length ? dev.lista.map(v => `<tr>
+          <td>${dataBR(v.data)}</td>
+          <td><a href="#/pedido/${v.pedido_id}"><b>${esc(v.numero)}</b></a></td>
+          <td>${esc(v.cliente_nome)}</td>
+          <td><small>${esc(v.representada_nome)}</small></td>
+          <td><small>${esc(v.motivo || '-')}</small></td>
+          <td class="dir mono">${dinheiro(v.valor)}</td>
+          <td class="dir">${pct(v.comissao_pct)}</td>
+          <td class="dir mono neg"><b>- ${dinheiro(v.comissao_estorno)}</b></td>
+          <td class="cen"><button class="btn btn-peq btn-perigo apagar-dev" data-id="${v.id}"
+            title="Apagar esta devolução">×</button></td></tr>`).join('')
+        : '<tr><td colspan="9" class="vazio"><b>Nenhuma devolução no período</b>Quando um cliente devolver mercadoria, lance aqui para abater da comissão.</td></tr>'}
+      </tbody>
+    </table></div></div></div>
+
   <div class="info-linha">A comissão de cada pedido usa a <b>% gravada no próprio pedido</b>. Se você negociou
-    diferente em algum, altere o percentual dentro do pedido que o valor se ajusta aqui.</div>`);
+    diferente em algum, altere o percentual dentro do pedido que o valor se ajusta aqui.
+    A devolução estorna pela mesma %, e só entra no acerto se você marcar a opção na hora de gerar.</div>`);
 
   ligarDicas();
   const filtrar = () => {
@@ -604,6 +716,16 @@ telas.comissoes = async () => {
   $('#btn-marcar').addEventListener('click', () => marcar('recebida'));
   $('#btn-desmarcar').addEventListener('click', () => marcar('pendente'));
 
+  /* ---- devoluções ---- */
+  $('#btn-devolucao').addEventListener('click', () => lancarDevolucao(null, rotear));
+  $$('.apagar-dev').forEach(b => b.addEventListener('click', async () => {
+    const v = dev.lista.find(x => x.id === Number(b.dataset.id));
+    if (!confirm(`Apagar a devolução de ${dinheiro(v.valor)} do pedido ${v.numero}?\n\n` +
+      `A comissão volta a contar ${dinheiro(v.comissao_estorno)} a mais.`)) return;
+    try { await api('DELETE', '/devolucoes/' + v.id); ok('Devolução apagada.'); rotear(); }
+    catch (e) { erro(e); }
+  }));
+
   /* ---- acerto: o PDF de cobrança que vai para cada representada ---- */
   $('#btn-acerto').addEventListener('click', async () => {
     const d1 = $('#f-de').value, d2 = $('#f-ate').value;
@@ -622,26 +744,43 @@ telas.comissoes = async () => {
     }
 
     const base = `de=${encodeURIComponent(d1)}&ate=${encodeURIComponent(d2)}`;
+    const temDev = a.total_devolucoes > 0;
     abrirModal(`<h3>Acerto de comissão — ${esc(a.periodo.rotulo)}</h3>
       <div class="modal-corpo">
         <p class="modal-sub">Um PDF por representada, com os pedidos listados um a um, para você
           mandar para a empresa pagar. Entra só o que está <b>a receber</b> — gerar o acerto
           não marca nada como recebido.</p>
-        <div class="acerto-lista">
-          ${a.representadas.map(r => `<div class="acerto-item">
-            <div class="acerto-nome"><b>${esc(r.nome)}</b>
-              <small>${r.qtd} pedido(s) • ${dataBR(r.primeiro)} a ${dataBR(r.ultimo)}</small></div>
-            <div class="acerto-val mono">${dinheiro(r.comissao)}</div>
-            <a class="btn btn-peq btn-primario" href="/api/comissoes/acerto/${r.representada_id}/pdf?${base}"
-              target="_blank" rel="noopener">Gerar acerto</a>
-          </div>`).join('')}
-          <div class="acerto-item acerto-total">
-            <div class="acerto-nome"><b>Total a receber</b></div>
-            <div class="acerto-val mono">${dinheiro(a.total)}</div>
-          </div>
-        </div>
+        ${temDev ? `<label class="dev-opcao">
+          <input type="checkbox" id="ac-dev" checked>
+          <span><b>Abater as devoluções do período</b>
+            <small>${dinheiro(a.total_devolucoes)} em estornos lançados entre ${dataBR(d1)} e ${dataBR(d2)}.
+              Desmarque para gerar o acerto só com os pedidos.</small></span></label>` : ''}
+        <div class="acerto-lista" id="ac-lista"></div>
         <div class="modal-acoes"><button class="btn" onclick="window.__fechar()">Fechar</button></div>
       </div>`);
+
+    const desenhar = () => {
+      const abater = !!$('#ac-dev')?.checked;
+      const valor = (r) => (abater ? r.liquido : r.comissao);
+      const linhas = a.representadas.filter(r => r.qtd > 0 || (abater && r.qtd_devolucoes > 0));
+      $('#ac-lista').innerHTML = `
+        ${linhas.map(r => `<div class="acerto-item">
+          <div class="acerto-nome"><b>${esc(r.nome)}</b>
+            <small>${r.qtd} pedido(s) • ${dataBR(r.primeiro)} a ${dataBR(r.ultimo)}${
+              abater && r.qtd_devolucoes ? ` • <span class="neg">${r.qtd_devolucoes} devolução(ões), - ${dinheiro(r.devolucao_estorno)}</span>` : ''}</small></div>
+          <div class="acerto-val mono ${valor(r) < 0 ? 'neg' : ''}">${dinheiro(valor(r))}</div>
+          <a class="btn btn-peq btn-primario"
+            href="/api/comissoes/acerto/${r.representada_id}/pdf?${base}${abater ? '&devolucoes=1' : ''}"
+            target="_blank" rel="noopener">Gerar acerto</a>
+        </div>`).join('')}
+        <div class="acerto-item acerto-total">
+          <div class="acerto-nome"><b>Total a receber</b>${
+            abater && temDev ? `<small>${dinheiro(a.total)} de comissão menos ${dinheiro(a.total_devolucoes)} de devoluções</small>` : ''}</div>
+          <div class="acerto-val mono">${dinheiro(abater ? a.total_liquido : a.total)}</div>
+        </div>`;
+    };
+    desenhar();
+    $('#ac-dev')?.addEventListener('change', desenhar);
   });
 };
 
@@ -967,10 +1106,11 @@ telas.cotacoes = listaDocumentos('cotacao');
 function editor(tipoPadrao) {
   return async (args) => {
     const id = args[0] && args[0] !== 'novo' ? Number(args[0]) : null;
-    let doc, itens = [];
+    let doc, itens = [], devs = { lista: [], resumo: { qtd: 0, valor: 0, estorno: 0 } };
     if (id) {
       doc = await get('/pedidos/' + id);
       itens = doc.itens.map(i => ({ ...i }));
+      if (doc.tipo === 'pedido') devs = await get('/devolucoes?pedido_id=' + id).catch(() => devs);
     } else {
       doc = {
         tipo: tipoPadrao, status: tipoPadrao === 'cotacao' ? 'rascunho' : 'aberto',
@@ -996,6 +1136,15 @@ function editor(tipoPadrao) {
 
     pintar(`
     ${bloqueado ? `<div class="aviso-linha">Este ${eCot ? 'documento' : 'pedido'} está <b>${ETIQUETAS[doc.status][1].toLowerCase()}</b> e não pode mais ser editado.</div>` : ''}
+    ${devs.lista.length ? `<div class="cartao"><div class="cartao-tit">Devoluções deste pedido
+        <span style="font-weight:400;color:var(--suave);font-size:12.5px">${dinheiro(devs.resumo.valor)} devolvido
+          • estorno de ${dinheiro(devs.resumo.estorno)} na comissão</span></div>
+      <div class="cartao-corpo sem-pad"><div class="tabela-rolagem"><table>
+        <thead><tr><th>Data</th><th>Motivo</th><th class="dir">Devolvido</th><th class="dir">%</th><th class="dir">Estorno</th></tr></thead>
+        <tbody>${devs.lista.map(v => `<tr><td>${dataBR(v.data)}</td><td><small>${esc(v.motivo || '-')}</small></td>
+          <td class="dir mono">${dinheiro(v.valor)}</td><td class="dir">${pct(v.comissao_pct)}</td>
+          <td class="dir mono neg"><b>- ${dinheiro(v.comissao_estorno)}</b></td></tr>`).join('')}</tbody>
+      </table></div></div></div>` : ''}
     <form id="form-pedido">
       <div class="cartao"><div class="cartao-tit">Dados do ${eCot ? 'orçamento' : 'pedido'}</div><div class="cartao-corpo">
         <div class="grade g4">
@@ -1235,12 +1384,14 @@ function editor(tipoPadrao) {
     $('#btn-mais')?.addEventListener('click', () => {
       abrirModal(`<h3>Mais ações</h3><div class="busca-lista">
         <div data-a="duplicar"><b>Duplicar</b><small>Cria uma cópia com a data de hoje</small></div>
-        ${eCot ? '<div data-a="converter"><b>Converter em pedido</b><small>Gera o pedido e marca a cotação como ganha</small></div>' : ''}
+        ${eCot ? '<div data-a="converter"><b>Converter em pedido</b><small>Gera o pedido e marca a cotação como ganha</small></div>'
+          : '<div data-a="devolucao"><b>Lançar devolução</b><small>Mercadoria que voltou: estorna da comissão</small></div>'}
         <div data-a="excluir" class="perigo"><b>Excluir</b><small>Remove definitivamente</small></div>
       </div>`);
       $('#modal-corpo .busca-lista').addEventListener('click', async e => {
         const d = e.target.closest('[data-a]'); if (!d) return;
         try {
+          if (d.dataset.a === 'devolucao') { fecharModal(); lancarDevolucao(doc, rotear); return; }
           if (d.dataset.a === 'duplicar') { const novo = await api('POST', `/pedidos/${id}/duplicar`); fecharModal(); ok('Cópia criada: ' + novo.numero); location.hash = `#/${eCot ? 'cotacao' : 'pedido'}/${novo.id}`; rotear(); }
           if (d.dataset.a === 'converter') { const novo = await api('POST', `/pedidos/${id}/converter`); fecharModal(); ok('Pedido gerado: ' + novo.numero); location.hash = '#/pedido/' + novo.id; rotear(); }
           if (d.dataset.a === 'excluir') {

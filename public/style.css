@@ -335,6 +335,12 @@ td .cod,th .cod,td.cod{font-size:12.5px;font-weight:500}
 .modal-caixa.m-produto{max-width:820px}
 .modal-caixa.m-cliente{max-width:880px}
 /* lista de escolha */
+/* liga/desliga do abatimento de devolucoes no acerto */
+.dev-opcao{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;
+  border:1px solid var(--borda-campo);border-radius:var(--raio-campo);background:var(--fundo-suave);cursor:pointer}
+.dev-opcao input{margin-top:2px;flex:0 0 auto}
+.dev-opcao span{display:flex;flex-direction:column;gap:3px;font-size:13px}
+.dev-opcao small{color:var(--suave);font-size:12px;line-height:1.45}
 .modal-sub{font-size:13px;color:var(--suave);line-height:1.5}
 .modal-sub b{color:var(--texto);font-weight:600}
 /* lista de acertos: lista, nao tabela — no celular o botao tem que caber sem
