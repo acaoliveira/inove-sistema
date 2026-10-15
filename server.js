@@ -80,10 +80,18 @@ const servidor = http.createServer(async (req, res) => {
     }).filter(p => p[0]));
     const sessao = verificar(cookies.repsys || (req.headers.authorization || '').replace(/^Bearer /, ''));
     let usuario = null;
-    if (sessao) usuario = db.prepare('SELECT id, nome, email, papel, ativo FROM usuarios WHERE id = ?').get(sessao.uid) || null;
+    if (sessao) usuario = db.prepare('SELECT id, nome, email, papel, ativo, trocar_senha FROM usuarios WHERE id = ?').get(sessao.uid) || null;
     if (usuario && !usuario.ativo) usuario = null;
 
     if (!achou.publica && !usuario) throw new ErroApi('Sessão expirada. Faça login novamente.', 401);
+
+    // Senha temporária: enquanto não trocar, só pode ver quem é, trocar a senha
+    // e sair. Esconder a tela no navegador não seria controle de acesso.
+    if (usuario && usuario.trocar_senha &&
+        !['/api/eu', '/api/senha', '/api/logout'].includes(url.pathname)) {
+      throw new ErroApi('Você está com uma senha temporária. Defina uma senha nova para continuar.', 403);
+    }
+
     if (achou.admin && usuario.papel !== 'admin') throw new ErroApi('Apenas administradores podem fazer isso.', 403);
 
     const m = url.pathname.match(achou.regex);
@@ -140,7 +148,9 @@ servidor.on('listening', () => {
   console.log(`    Neste computador:   http://localhost:${porta}`);
   if (ip) console.log(`    No celular/tablet:  http://${ip}:${porta}   (mesmo Wi-Fi)`);
   console.log('');
-  console.log('    Login: admin@local     Senha: admin123');
+  // a senha padrao so aparece quando o usuario inicial e criado (veja src/db.js):
+  // deixar fixo aqui mostrava a senha de fabrica mesmo depois de trocada
+  console.log('    Esqueceu a senha? Use "Esqueci minha senha" na tela de acesso.');
   console.log('');
   console.log('    NAO FECHE ESTA JANELA enquanto estiver usando o sistema.');
   console.log('  ==========================================================\n');
