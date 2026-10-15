@@ -99,6 +99,9 @@ input:focus,select:focus,textarea:focus,button:focus-visible,a:focus-visible{
 .login-card .dica{border:1px dashed #dcd9d2;border-radius:10px;padding:12px 14px;
   font-size:12.5px;color:var(--suave);margin:0}
 .login-card .dica b{color:var(--texto);font-weight:600}
+.login-ajuda{margin:0;text-align:center;font-size:13px}
+.login-ajuda a{color:var(--suave);text-decoration:underline;text-underline-offset:3px}
+.login-ajuda a:hover{color:var(--texto)}
 
 /* ------------------------------------------------------------------ menu */
 #app{display:flex;min-height:100vh;align-items:flex-start}
@@ -341,6 +344,10 @@ td .cod,th .cod,td.cod{font-size:12.5px;font-weight:500}
 .dev-opcao input{margin-top:2px;flex:0 0 auto}
 .dev-opcao span{display:flex;flex-direction:column;gap:3px;font-size:13px}
 .dev-opcao small{color:var(--suave);font-size:12px;line-height:1.45}
+/* senha temporaria: aparece uma vez so, entao tem que dar pra ler e ditar */
+.senha-temp{font-size:28px;font-weight:600;letter-spacing:.06em;text-align:center;
+  padding:18px 14px;border:1px dashed var(--borda-campo);border-radius:var(--raio);
+  background:var(--fundo-suave);user-select:all}
 .modal-sub{font-size:13px;color:var(--suave);line-height:1.5}
 .modal-sub b{color:var(--texto);font-weight:600}
 /* lista de acertos: lista, nao tabela — no celular o botao tem que caber sem

@@ -177,6 +177,8 @@ async function iniciar() {
   try {
     const r = await get('/eu');
     estado.usuario = r.usuario; estado.config = r.config;
+    // senha temporária: o servidor bloqueia tudo até trocar, então nem carrega o resto
+    if (r.usuario.trocar_senha) return trocaObrigatoria();
     $('#tela-login').classList.add('oculto');
     $('#app').classList.remove('oculto');
     $('#nome-usuario').textContent = r.usuario.nome;
@@ -187,11 +189,102 @@ async function iniciar() {
     rotear();
   } catch { mostrarLogin(); }
 }
+
+/** Entrou com senha temporária: define a nova antes de qualquer tela */
+function trocaObrigatoria() {
+  $('#app').classList.add('oculto');
+  $('#tela-login').classList.remove('oculto');
+  const card = $('#form-login');
+  card.dataset.modo = 'troca';
+  card.innerHTML = `
+    <div>
+      <h2>Defina sua senha</h2>
+      <p class="sub">Você entrou com uma senha temporária. Escolha uma senha sua para continuar.</p>
+    </div>
+    <label>Senha temporária<input type="password" id="tr-atual" required autocomplete="current-password"></label>
+    <label>Nova senha<input type="password" id="tr-nova" required minlength="4" autocomplete="new-password"></label>
+    <label>Repita a nova senha<input type="password" id="tr-nova2" required minlength="4" autocomplete="new-password"></label>
+    <button class="btn btn-primario btn-bloco" type="submit">Salvar e entrar</button>
+    <div class="erro" id="erro-login"></div>
+    <p class="login-ajuda"><a href="#" id="tr-sair">Sair</a></p>`;
+  $('#tr-sair').addEventListener('click', async (e) => {
+    e.preventDefault(); await api('POST', '/logout'); location.reload();
+  });
+  card.onsubmit = async (e) => {
+    e.preventDefault();
+    const nova = $('#tr-nova').value;
+    if (nova.length < 4) return ($('#erro-login').textContent = 'A nova senha precisa ter ao menos 4 caracteres.');
+    if (nova !== $('#tr-nova2').value) return ($('#erro-login').textContent = 'As duas senhas não são iguais.');
+    try {
+      await api('POST', '/senha', { atual: $('#tr-atual').value, nova });
+      location.reload();
+    } catch (x) { $('#erro-login').textContent = x.message; }
+  };
+}
+
+/* ---- "Esqueci minha senha": prova quem é pela pergunta de segurança ---- */
+$('#link-esqueci').addEventListener('click', (e) => {
+  e.preventDefault();
+  abrirModal(`<h3>Esqueci minha senha</h3>
+    <div class="modal-corpo">
+      <p class="modal-sub">Informe o e-mail cadastrado. Se você tiver uma pergunta de segurança,
+        respondendo certo já define uma senha nova.</p>
+      <label class="campo">E-mail
+        <input type="email" id="rc-email" value="${esc($('#form-login [name=email]')?.value || '')}"
+          autocomplete="username"></label>
+      <div id="rc-passo2" class="oculto">
+        <label class="campo" id="rc-rot-pergunta">Pergunta
+          <input type="text" id="rc-resposta" placeholder="sua resposta" autocomplete="off"></label>
+        <div class="grade g2" style="margin-top:12px">
+          <label class="campo">Nova senha<input type="password" id="rc-nova" minlength="4" autocomplete="new-password"></label>
+          <label class="campo">Repita a nova senha<input type="password" id="rc-nova2" minlength="4" autocomplete="new-password"></label>
+        </div>
+      </div>
+      <div class="erro" id="rc-erro" style="color:var(--vermelho-txt);font-size:13px"></div>
+      <div class="modal-acoes">
+        <button class="btn" onclick="window.__fechar()">Cancelar</button>
+        <button class="btn btn-primario" id="rc-ok">Continuar</button>
+      </div>
+    </div>`);
+
+  let passo = 1;
+  const falha = (m) => { $('#rc-erro').textContent = m; };
+  $('#rc-ok').addEventListener('click', async () => {
+    falha('');
+    if (passo === 1) {
+      const email = $('#rc-email').value.trim();
+      if (!email) return falha('Informe o e-mail cadastrado.');
+      try {
+        const r = await get('/recuperar?email=' + encodeURIComponent(email));
+        if (!r.tem_pergunta) return falha(r.aviso);
+        $('#rc-rot-pergunta').firstChild.textContent = r.pergunta + ' ';
+        $('#rc-passo2').classList.remove('oculto');
+        $('#rc-ok').textContent = 'Salvar nova senha';
+        $('#rc-email').readOnly = true;
+        $('#rc-resposta').focus();
+        passo = 2;
+      } catch (x) { falha(x.message); }
+      return;
+    }
+    const nova = $('#rc-nova').value;
+    if (nova.length < 4) return falha('A nova senha precisa ter ao menos 4 caracteres.');
+    if (nova !== $('#rc-nova2').value) return falha('As duas senhas não são iguais.');
+    try {
+      await api('POST', '/recuperar', { email: $('#rc-email').value.trim(), resposta: $('#rc-resposta').value, nova });
+      fecharModal();
+      ok('Senha alterada! Entre com a nova senha.');
+      $('#form-login [name=senha]')?.focus();
+    } catch (x) { falha(x.message); }
+  });
+  setTimeout(() => $('#rc-email').focus(), 80);
+});
 function mostrarLogin() {
   $('#app').classList.add('oculto');
   $('#tela-login').classList.remove('oculto');
 }
 $('#form-login').addEventListener('submit', async e => {
+  // o mesmo <form> vira a tela de troca obrigatória; lá quem responde é o onsubmit dela
+  if (e.currentTarget.dataset.modo === 'troca') return;
   e.preventDefault();
   $('#erro-login').textContent = '';
   try { await api('POST', '/login', dadosForm(e.target)); location.hash = '#/painel'; await iniciar(); }
@@ -205,6 +298,8 @@ $$('#menu .item').forEach(a => a.addEventListener('click', () => { location.hash
 /* ------------------------------------------------------------- rotas */
 const telas = {};
 async function rotear() {
+  // com senha temporária o servidor barra tudo: não adianta tentar abrir tela
+  if (estado.usuario?.trocar_senha) return;
   const partes = (location.hash.replace(/^#\/?/, '') || 'painel').split('/');
   const nome = partes[0].split('?')[0];   // "#/comissoes?de=..." → "comissoes"
   $$('#menu .item').forEach(a => a.classList.toggle('ativo', a.dataset.tela === nome ||
@@ -2133,6 +2228,27 @@ telas.config = async () => {
       <label class="campo">&nbsp;<button class="btn btn-primario btn-bloco">Alterar senha</button></label>
     </div></form>
   </div></div>
+
+      <div class="cartao"><div class="cartao-tit">Pergunta de segurança
+        ${estado.usuario.tem_pergunta
+          ? '<span class="etq etq-verde">Cadastrada</span>'
+          : '<span class="etq etq-laranja">Não cadastrada</span>'}</div><div class="cartao-corpo">
+    <p style="margin-top:0;color:var(--suave);font-size:13px">É assim que você destrava o sistema sozinho se esquecer
+      a senha: na tela de acesso, "Esqueci minha senha" faz esta pergunta. Escolha algo que só você saiba responder —
+      <b>sem ela, só o administrador consegue gerar uma senha nova para você</b>.</p>
+    <form id="form-seguranca">
+      <div class="grade g3">
+        <label class="campo">Pergunta
+          <input name="pergunta" required minlength="5" placeholder="Qual era o nome do meu primeiro cachorro?"
+            value="${esc(estado.usuario.pergunta_seguranca || '')}"></label>
+        <label class="campo">Resposta<input name="resposta" required minlength="2" placeholder="a resposta secreta"></label>
+        <label class="campo">Senha atual<input type="password" name="atual" required></label>
+      </div>
+      <button class="btn btn-primario" style="margin-top:12px">
+        ${estado.usuario.tem_pergunta ? 'Trocar pergunta' : 'Cadastrar pergunta'}</button>
+      <small class="ajuda" style="margin-left:10px">Maiúsculas e acentos não atrapalham na hora de responder.</small>
+    </form>
+  </div></div>
     </div>
     <div class="coluna">
       ${admin ? `<div class="cartao"><div class="cartao-tit">Logo da empresa</div><div class="cartao-corpo">
@@ -2194,6 +2310,16 @@ telas.config = async () => {
     try { await api('POST', '/senha', dadosForm(e.target)); ok('Senha alterada!'); e.target.reset(); } catch (x) { erro(x); }
   });
 
+  $('#form-seguranca').addEventListener('submit', async e => {
+    e.preventDefault();
+    try {
+      await api('POST', '/seguranca', dadosForm(e.target));
+      ok('Pergunta de segurança cadastrada. Agora você consegue recuperar a senha sozinho.');
+      estado.usuario.tem_pergunta = true;
+      rotear();
+    } catch (x) { erro(x); }
+  });
+
   if (admin) {
     const carregarUsuarios = async () => {
       estado.usuarios = await get('/usuarios');
@@ -2201,13 +2327,25 @@ telas.config = async () => {
         <td><b>${esc(u.nome)}</b></td><td>${esc(u.email)}</td><td style="text-transform:capitalize">${u.papel}</td>
         <td class="cen">${u.ativo ? '✔' : '—'}</td>
         <td class="dir"><div class="linha-acoes">
-          <button class="btn btn-peq" data-senha="${u.id}">Trocar senha</button>
+          <button class="btn btn-peq" data-senha="${u.id}">Gerar senha temporária</button>
           <button class="btn btn-peq" data-editar="${u.id}">Editar</button></div></td></tr>`).join('');
       $$('#corpo-usuarios [data-editar]').forEach(b => b.addEventListener('click', () => formUsuario(estado.usuarios.find(x => x.id === Number(b.dataset.editar)), carregarUsuarios)));
       $$('#corpo-usuarios [data-senha]').forEach(b => b.addEventListener('click', async () => {
-        const s = prompt('Nova senha para este usuário:');
-        if (!s) return;
-        try { await api('POST', `/usuarios/${b.dataset.senha}/senha`, { senha: s }); ok('Senha alterada.'); } catch (e) { erro(e); }
+        const u = estado.usuarios.find(x => x.id === Number(b.dataset.senha));
+        if (!confirm(`Gerar uma senha temporária para ${u.nome}?\n\n` +
+          'A senha atual dele(a) para de funcionar na hora, e no próximo acesso o sistema vai pedir que escolha uma senha nova.')) return;
+        try {
+          const r = await api('POST', `/usuarios/${u.id}/senha`, {});
+          abrirModal(`<h3>Senha temporária de ${esc(r.nome)}</h3>
+            <div class="modal-corpo">
+              <p class="modal-sub">Passe esta senha para a pessoa. Ela aparece <b>uma única vez</b> —
+                se fechar sem anotar, é só gerar outra.</p>
+              <div class="senha-temp cod">${esc(r.senha)}</div>
+              <small class="ajuda">No primeiro acesso o sistema pede que ela escolha uma senha própria.
+                Até lá, nenhuma tela abre.</small>
+              <div class="modal-acoes"><button class="btn btn-primario" onclick="window.__fechar()">Fechar</button></div>
+            </div>`);
+        } catch (e) { erro(e); }
       }));
     };
     $('#btn-novo-usuario').addEventListener('click', () => formUsuario(null, carregarUsuarios));
