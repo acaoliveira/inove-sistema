@@ -220,6 +220,10 @@ garantirColuna('pedidos', 'condicao_texto', "TEXT DEFAULT ''");        // prazo 
 garantirColuna('pedidos', 'comissao_pct', "REAL");                     // NULL = usa a % da representada
 garantirColuna('pedidos', 'comissao_status', "TEXT DEFAULT 'pendente'"); // pendente | recebida
 garantirColuna('pedidos', 'comissao_recebida_em', "TEXT DEFAULT ''");
+// recuperação de senha: pergunta secreta do próprio usuário e troca obrigatória
+garantirColuna('usuarios', 'pergunta_seguranca', "TEXT DEFAULT ''");
+garantirColuna('usuarios', 'resposta_hash', "TEXT DEFAULT ''");
+garantirColuna('usuarios', 'trocar_senha', "INTEGER NOT NULL DEFAULT 0");
 
 // ---- valores padrao de configuracao (dados do representante / cabecalho do PDF)
 const cfgPadrao = {

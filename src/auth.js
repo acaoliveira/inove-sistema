@@ -52,4 +52,26 @@ function verificar(token) {
   } catch { return null; }
 }
 
-module.exports = { hashSenha, conferirSenha, assinar, verificar };
+/**
+ * A resposta da pergunta de segurança é guardada com o mesmo cuidado da senha,
+ * mas comparada de forma tolerante: quem escreve "Rex" hoje pode escrever
+ * " rex " daqui a seis meses e precisa entrar do mesmo jeito.
+ */
+function normalizarResposta(txt) {
+  return String(txt ?? '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')   // tira acento
+    .trim().toLowerCase().replace(/\s+/g, ' ');
+}
+const hashResposta = (r) => hashSenha(normalizarResposta(r));
+const conferirResposta = (r, hash) => conferirSenha(normalizarResposta(r), hash);
+
+/** Senha temporária fácil de ditar no telefone: sem 0/O, 1/l/I e sem acento */
+function senhaTemporaria() {
+  const letras = 'ABCDEFGHJKMNPQRSTUVWXYZ';
+  const numeros = '23456789';
+  const sorteio = (s, n) => Array.from({ length: n }, () => s[crypto.randomInt(s.length)]).join('');
+  return `${sorteio(letras, 3)}-${sorteio(numeros, 4)}`;
+}
+
+module.exports = { hashSenha, conferirSenha, assinar, verificar,
+  hashResposta, conferirResposta, normalizarResposta, senhaTemporaria };

@@ -1,6 +1,7 @@
 'use strict';
 const { db, config, setConfig, DB_FILE, DATA_DIR } = require('./db');
-const { hashSenha, conferirSenha, assinar } = require('./auth');
+const { hashSenha, conferirSenha, assinar,
+  hashResposta, conferirResposta, senhaTemporaria } = require('./auth');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -45,16 +46,90 @@ module.exports = function (rota, ErroApi) {
     return { ok: true };
   }, { publica: true });
 
-  rota.get('/api/eu', ({ usuario }) => ({
-    usuario,
-    config: Object.fromEntries(db.prepare('SELECT chave, valor FROM config').all().map(r => [r.chave, r.valor])),
-  }));
+  rota.get('/api/eu', ({ usuario }) => {
+    const u = db.prepare('SELECT pergunta_seguranca, trocar_senha FROM usuarios WHERE id = ?').get(usuario.id);
+    return {
+      usuario: { ...usuario, trocar_senha: u?.trocar_senha ? 1 : 0,
+        tem_pergunta: !!u?.pergunta_seguranca, pergunta_seguranca: u?.pergunta_seguranca || '' },
+      config: Object.fromEntries(db.prepare('SELECT chave, valor FROM config').all().map(r => [r.chave, r.valor])),
+    };
+  });
 
   rota.post('/api/senha', ({ corpo, usuario }) => {
     const u = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(usuario.id);
     if (!conferirSenha(corpo.atual, u.senha_hash)) throw new ErroApi('Senha atual incorreta.');
     if (String(corpo.nova || '').length < 4) throw new ErroApi('A nova senha precisa ter ao menos 4 caracteres.');
-    db.prepare('UPDATE usuarios SET senha_hash = ? WHERE id = ?').run(hashSenha(corpo.nova), usuario.id);
+    // trocou a senha: a exigência de troca obrigatória (senha temporária) morre aqui
+    db.prepare('UPDATE usuarios SET senha_hash = ?, trocar_senha = 0 WHERE id = ?')
+      .run(hashSenha(corpo.nova), usuario.id);
+    return { ok: true };
+  });
+
+  // =========================================================== RECUPERAÇÃO
+  // O sistema não manda e-mail (não tem servidor de e-mail nem dependência
+  // externa). Quem esqueceu a senha prova quem é respondendo a pergunta que
+  // ele mesmo cadastrou. Sem pergunta cadastrada, só o administrador destrava.
+  const PERGUNTA_GENERICA = 'Este e-mail não tem pergunta de segurança cadastrada. ' +
+    'Peça ao administrador do sistema para gerar uma senha temporária para você.';
+
+  /** Mesma trava do login: errar a resposta muitas vezes bloqueia por 15 minutos */
+  function conferirTrava(req) {
+    const origem = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '?';
+    const t = tentativas.get(origem);
+    if (t && t.bloqueado_ate > Date.now()) {
+      const min = Math.ceil((t.bloqueado_ate - Date.now()) / 60000);
+      throw new ErroApi(`Muitas tentativas. Tente de novo em ${min} minuto(s).`, 429);
+    }
+    return origem;
+  }
+  function contarErro(origem) {
+    const agora = Date.now();
+    const t = tentativas.get(origem);
+    const n = (t && t.desde > agora - JANELA ? t.contagem : 0) + 1;
+    tentativas.set(origem, {
+      contagem: n, desde: t && t.desde > agora - JANELA ? t.desde : agora,
+      bloqueado_ate: n >= LIMITE ? agora + JANELA : 0,
+    });
+  }
+
+  const porEmail = (email) => db.prepare('SELECT * FROM usuarios WHERE lower(email) = ?')
+    .get(String(email || '').trim().toLowerCase());
+
+  /** Passo 1: qual é a pergunta de segurança deste e-mail */
+  rota.get('/api/recuperar', ({ query, req }) => {
+    conferirTrava(req);
+    const u = porEmail(query.email);
+    if (!u || !u.ativo || !u.pergunta_seguranca || !u.resposta_hash) {
+      return { tem_pergunta: false, aviso: PERGUNTA_GENERICA };
+    }
+    return { tem_pergunta: true, pergunta: u.pergunta_seguranca };
+  }, { publica: true });
+
+  /** Passo 2: resposta certa troca a senha na hora */
+  rota.post('/api/recuperar', ({ corpo, req }) => {
+    const origem = conferirTrava(req);
+    const u = porEmail(corpo.email);
+    if (!u || !u.ativo || !u.resposta_hash || !conferirResposta(corpo.resposta, u.resposta_hash)) {
+      contarErro(origem);
+      throw new ErroApi('Resposta incorreta.', 401);
+    }
+    if (String(corpo.nova || '').length < 4) throw new ErroApi('A nova senha precisa ter ao menos 4 caracteres.');
+    tentativas.delete(origem);
+    db.prepare('UPDATE usuarios SET senha_hash = ?, trocar_senha = 0 WHERE id = ?')
+      .run(hashSenha(corpo.nova), u.id);
+    return { ok: true };
+  }, { publica: true });
+
+  /** Cadastrar ou trocar a própria pergunta de segurança (pede a senha atual) */
+  rota.post('/api/seguranca', ({ corpo, usuario }) => {
+    const u = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(usuario.id);
+    if (!conferirSenha(corpo.atual, u.senha_hash)) throw new ErroApi('Senha atual incorreta.');
+    const pergunta = String(corpo.pergunta || '').trim();
+    const resposta = String(corpo.resposta || '').trim();
+    if (pergunta.length < 5) throw new ErroApi('Escreva uma pergunta com pelo menos 5 letras.');
+    if (resposta.length < 2) throw new ErroApi('Escreva a resposta da pergunta.');
+    db.prepare('UPDATE usuarios SET pergunta_seguranca = ?, resposta_hash = ? WHERE id = ?')
+      .run(pergunta, hashResposta(resposta), usuario.id);
     return { ok: true };
   });
 
@@ -136,9 +211,15 @@ module.exports = function (rota, ErroApi) {
   });
   // senha obrigatória ao criar usuário
   rota.post('/api/usuarios/:id/senha', ({ params, corpo }) => {
-    if (String(corpo.senha || '').length < 4) throw new ErroApi('Senha muito curta.');
-    db.prepare('UPDATE usuarios SET senha_hash = ? WHERE id = ?').run(hashSenha(corpo.senha), Number(params.id));
-    return { ok: true };
+    const alvo = db.prepare('SELECT id, nome FROM usuarios WHERE id = ?').get(Number(params.id));
+    if (!alvo) throw new ErroApi('Usuário não encontrado.', 404);
+    // sem senha informada, o sistema sorteia uma temporária e mostra uma vez só
+    const temporaria = corpo.senha === undefined || corpo.senha === null || corpo.senha === '';
+    const senha = temporaria ? senhaTemporaria() : String(corpo.senha);
+    if (senha.length < 4) throw new ErroApi('Senha muito curta.');
+    db.prepare('UPDATE usuarios SET senha_hash = ?, trocar_senha = ? WHERE id = ?')
+      .run(hashSenha(senha), temporaria ? 1 : 0, alvo.id);
+    return temporaria ? { ok: true, temporaria: true, senha, nome: alvo.nome } : { ok: true };
   }, { admin: true });
 
   // ---- representadas
