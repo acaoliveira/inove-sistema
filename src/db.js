@@ -203,6 +203,24 @@ CREATE TABLE IF NOT EXISTS devolucoes (
 CREATE INDEX IF NOT EXISTS idx_devolucoes_pedido ON devolucoes(pedido_id);
 CREATE INDEX IF NOT EXISTS idx_devolucoes_data ON devolucoes(data);
 
+-- Como foi o ditado por voz naquele pedido. Serve para medir se a função está
+-- acertando de verdade, em uso real, em vez de confiar na impressão de memória.
+CREATE TABLE IF NOT EXISTS voz_avaliacoes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pedido_id INTEGER REFERENCES pedidos(id) ON DELETE SET NULL,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  texto TEXT DEFAULT '',                        -- o que a pessoa falou
+  itens_propostos INTEGER NOT NULL DEFAULT 0,
+  itens_duvidosos INTEGER NOT NULL DEFAULT 0,   -- entraram pedindo escolha
+  itens_trocados INTEGER NOT NULL DEFAULT 0,    -- trocou o produto sugerido
+  itens_removidos INTEGER NOT NULL DEFAULT 0,
+  cliente_trocado INTEGER NOT NULL DEFAULT 0,
+  veredito TEXT DEFAULT '',                     -- acertou | quase | errou
+  observacao TEXT DEFAULT '',
+  criado_em TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_voz_data ON voz_avaliacoes(criado_em);
+
 CREATE TABLE IF NOT EXISTS config (
   chave TEXT PRIMARY KEY,
   valor TEXT NOT NULL DEFAULT ''
@@ -235,6 +253,7 @@ const cfgPadrao = {
   status_faturamento: 'faturado', // status que conta como venda realizada
   contar_status: 'aberto,enviado,faturado',
   logo_arquivo: '',
+  voz_perguntar: '1',   // perguntar se a voz acertou depois de salvar o pedido ditado
 };
 const insCfg = db.prepare('INSERT OR IGNORE INTO config (chave, valor) VALUES (?, ?)');
 for (const [k, v] of Object.entries(cfgPadrao)) insCfg.run(k, v);

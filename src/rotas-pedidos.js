@@ -249,6 +249,50 @@ module.exports = function (rota, ErroApi) {
     };
   });
 
+  // ------------------------------------------------- avaliação do ditado por voz
+  // Guarda como foi o pedido ditado: o que a pessoa achou e, principalmente, o
+  // que ela MEXEU depois — trocar produto é sinal mais honesto que opinião.
+  rota.post('/api/voz/avaliacao', ({ corpo, usuario }) => {
+    const v = ['acertou', 'quase', 'errou'].includes(corpo.veredito) ? corpo.veredito : '';
+    const num = (x) => Math.max(0, Math.round(Number(x) || 0));
+    db.prepare(`INSERT INTO voz_avaliacoes
+        (pedido_id, usuario_id, texto, itens_propostos, itens_duvidosos, itens_trocados,
+         itens_removidos, cliente_trocado, veredito, observacao)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(Number(corpo.pedido_id) || null, usuario?.id || null,
+        String(corpo.texto || '').slice(0, 600),
+        num(corpo.itens_propostos), num(corpo.itens_duvidosos), num(corpo.itens_trocados),
+        num(corpo.itens_removidos), corpo.cliente_trocado ? 1 : 0, v,
+        String(corpo.observacao || '').slice(0, 300));
+    return { ok: true };
+  });
+
+  /** Resumo para saber se vale manter o ditado como está */
+  rota.get('/api/voz/relatorio', () => {
+    const t = db.prepare(`SELECT COUNT(*) n,
+        IFNULL(SUM(itens_propostos),0) propostos, IFNULL(SUM(itens_duvidosos),0) duvidosos,
+        IFNULL(SUM(itens_trocados),0) trocados, IFNULL(SUM(itens_removidos),0) removidos,
+        IFNULL(SUM(cliente_trocado),0) cliente_trocado,
+        IFNULL(SUM(CASE WHEN veredito='acertou' THEN 1 ELSE 0 END),0) acertou,
+        IFNULL(SUM(CASE WHEN veredito='quase' THEN 1 ELSE 0 END),0) quase,
+        IFNULL(SUM(CASE WHEN veredito='errou' THEN 1 ELSE 0 END),0) errou
+      FROM voz_avaliacoes`).get();
+    const ultimas = db.prepare(`SELECT v.id, v.criado_em, v.texto, v.veredito, v.itens_propostos,
+        v.itens_trocados, v.itens_removidos, p.numero
+      FROM voz_avaliacoes v LEFT JOIN pedidos p ON p.id = v.pedido_id
+      ORDER BY v.id DESC LIMIT 20`).all();
+    const mexidos = t.trocados + t.removidos;
+    return {
+      total: t.n,
+      itens: { propostos: t.propostos, duvidosos: t.duvidosos, trocados: t.trocados, removidos: t.removidos },
+      // o número que importa: quantos itens ficaram como a voz propôs
+      aproveitamento: t.propostos ? Math.round(((t.propostos - mexidos) / t.propostos) * 100) : null,
+      veredito: { acertou: t.acertou, quase: t.quase, errou: t.errou },
+      cliente_trocado: t.cliente_trocado,
+      ultimas,
+    };
+  }, { admin: true });
+
   // ------------------------------------------------------------- devoluções
   // O cliente devolveu mercadoria depois do pedido faturado. O pedido continua
   // como está — quem muda é só a comissão, que leva o estorno.
