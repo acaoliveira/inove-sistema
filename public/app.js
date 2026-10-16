@@ -598,6 +598,245 @@ telas.painel = async () => {
 };
 
 /* =========================================================================
+   DITADO POR VOZ — fala vira rascunho de pedido, nunca pedido salvo
+   =========================================================================
+   O navegador transcreve (SpeechRecognition é nativo: sem biblioteca, sem
+   serviço externo). Aqui a gente só casa o texto com o catálogo cadastrado.
+   Quando dois produtos empatam, a voz NÃO escolhe: marca e pergunta.        */
+const VOZ_OK = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+
+const vozNumeros = { um:1,uma:1,dois:2,duas:2,tres:3,quatro:4,cinco:5,seis:6,sete:7,oito:8,nove:9,dez:10,
+  onze:11,doze:12,treze:13,quatorze:14,catorze:14,quinze:15,dezesseis:16,dezessete:17,dezoito:18,dezenove:19,
+  vinte:20,trinta:30,quarenta:40,cinquenta:50,sessenta:60,setenta:70,oitenta:80,noventa:90,cem:100,cento:100,duzentos:200 };
+const vozUnidades = { caixa:'CX',caixas:'CX',cx:'CX',fardo:'FD',fardos:'FD',fd:'FD',
+  quilo:'KG',quilos:'KG',kg:'KG',kilo:'KG',kilos:'KG',unidade:'UN',unidades:'UN',un:'UN',pacote:'UN',pacotes:'UN' };
+
+function vozNormalizar(s) {
+  let t = String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const p = t.split(' '), fora = [];
+  for (let i = 0; i < p.length; i++) {
+    if (vozNumeros[p[i]] !== undefined) {
+      let v = vozNumeros[p[i]];
+      if (v >= 20 && v <= 90 && p[i + 1] === 'e' && vozNumeros[p[i + 2]] !== undefined && vozNumeros[p[i + 2]] < 10) {
+        v += vozNumeros[p[i + 2]]; i += 2;
+      }
+      fora.push(String(v));
+    } else fora.push(p[i]);
+  }
+  t = fora.join(' ');
+  return t.replace(/(\d+)\s*(gramas|grama|gr|g)\b/g, '$1g')
+    .replace(/(\d+)\s+e\s+meio\s*(kg|quilos?|k)\b/g, '$1e5kg')
+    .replace(/(\d+)\s*(quilos|quilo|kilos|kilo|kg|k)\b/g, '$1kg')
+    .replace(/(\d+)\s+(\d+)\s*kg\b/g, '$1e$2kg')
+    .replace(/\s+/g, ' ').trim();
+}
+const vozTokens = (s) => vozNormalizar(s).split(' ').filter(Boolean);
+const VOZ_TAM = /^(\d+)(g|kg|ml|l)$|^(cx|fd)?\d+x\d+(g|kg|ml|l)$|^\d+e\d+kg$/;
+const vozTamanhos = (s) => vozTokens(s).filter(t => VOZ_TAM.test(t));
+function vozBigramas(s) {
+  const t = vozNormalizar(s).replace(/ /g, ''), r = [];
+  for (let i = 0; i < t.length - 1; i++) r.push(t.slice(i, i + 2));
+  return r;
+}
+function vozDice(a, b) {
+  const A = vozBigramas(a), B = vozBigramas(b);
+  if (!A.length || !B.length) return 0;
+  const m = new Map(); for (const g of A) m.set(g, (m.get(g) || 0) + 1);
+  let c = 0; for (const g of B) { const q = m.get(g) || 0; if (q > 0) { c++; m.set(g, q - 1); } }
+  return (2 * c) / (A.length + B.length);
+}
+function vozPontuar(consulta, alvo) {
+  const tc = vozTokens(consulta), ta = new Set(vozTokens(alvo));
+  if (!tc.length) return 0;
+  let s = 0.55 * (tc.filter(t => ta.has(t)).length / tc.length) + 0.45 * vozDice(consulta, alvo);
+  const tf = vozTamanhos(consulta), tp = vozTamanhos(alvo);
+  // errar 1KG por 5KG é o erro caro: tamanho diferente derruba a nota
+  if (tf.length && tp.length) s *= tf.some(x => tp.includes(x)) ? 1.15 : 0.40;
+  return Math.min(1, s);
+}
+const vozMelhores = (c, lista, campo, n = 4) =>
+  lista.map(x => ({ x, s: vozPontuar(c, campo(x)) })).sort((a, b) => b.s - a.s).slice(0, n);
+
+/** Quebra a fala em itens: cada pedaço começa num número */
+function vozFatiar(txt) {
+  const t = vozNormalizar(txt), re = /(?:^|\s)(\d+)\s+/g, cortes = [];
+  let m; while ((m = re.exec(t)) !== null) cortes.push({ i: m.index === 0 ? 0 : m.index + 1, q: Number(m[1]) });
+  return cortes.map((c, k) => {
+    const fim = k + 1 < cortes.length ? cortes[k + 1].i : t.length;
+    let corpo = t.slice(c.i, fim).replace(/^\d+\s*/, '').trim(), unidade = '';
+    const pu = corpo.split(' ')[0];
+    if (vozUnidades[pu]) { unidade = vozUnidades[pu]; corpo = corpo.slice(pu.length).trim(); }
+    corpo = corpo.replace(/^(de|do|da|dos|das)\s+/, '');
+    return { qtd: c.q, unidade, consulta: corpo };
+  }).filter(i => i.consulta.length > 2);
+}
+
+/**
+ * @param {string} texto fala transcrita
+ * @param {object} cat { produtos, clientes } — catálogo cadastrado
+ * @param {boolean} comCliente procurar cliente no fim da frase
+ */
+function vozAnalisar(texto, cat, comCliente) {
+  const t = vozNormalizar(texto);
+  const mc = comCliente ? t.match(/\b(?:para|pra|pro|cliente)\s+(?:o|a|os|as)?\s*([a-z0-9 ]{3,60})$/) : null;
+  const corpo = mc ? t.slice(0, mc.index) : t;
+  const cli = mc ? vozMelhores(mc[1], cat.clientes, c => (c.nome_fantasia ? c.nome_fantasia + ' ' : '') + c.razao_social, 4) : [];
+  const itens = vozFatiar(corpo).map(i => {
+    const cand = vozMelhores(i.consulta, cat.produtos, p => p.descricao, 4);
+    const gap = cand[0].s - (cand[1]?.s || 0);
+    // alternativa só entra se realmente concorre — sugestão ruim confunde mais que ajuda
+    const corte = Math.max(0.35, cand[0].s * 0.6);
+    return { ...i, candidatos: [cand[0], ...cand.slice(1).filter(c => c.s >= corte)],
+      escolhido: 0, duvida: gap < 0.08 || cand[0].s < 0.45 };
+  });
+  const cont = {};
+  for (const i of itens) if (i.candidatos[0].s > 0.45) {
+    const r = i.candidatos[0].x.representada_id; cont[r] = (cont[r] || 0) + 1;
+  }
+  const repId = Object.entries(cont).sort((a, b) => b[1] - a[1])[0]?.[0];
+  return { texto: texto.trim(), cliente: cli[0] && cli[0].s > 0.4 ? cli[0] : null,
+    itens, representada_id: repId ? Number(repId) : null };
+}
+
+/** Catálogo completo para o casamento — carregado uma vez por sessão */
+async function vozCatalogo() {
+  if (estado.vozCat) return estado.vozCat;
+  const [p, c] = await Promise.all([get('/produtos?ativo=1&limite=3000'), get('/clientes?ativo=1&limite=3000')]);
+  estado.vozCat = { produtos: p, clientes: c };
+  return estado.vozCat;
+}
+
+/**
+ * Painel do microfone. Devolve a análise por `aoAplicar`; não mexe em nada sozinho.
+ * @param {'pedido'|'itens'} modo pedido = procura cliente também
+ */
+async function abrirVoz(modo, aoAplicar) {
+  let cat;
+  try { cat = await vozCatalogo(); } catch (e) { return erro(e); }
+  const comCliente = modo === 'pedido';
+
+  abrirModal(`<h3>Ditar ${comCliente ? 'pedido' : 'itens'}</h3>
+    <div class="modal-corpo">
+      ${VOZ_OK ? '' : `<div class="aviso-linha">Este navegador não reconhece voz.
+        No iPhone use o <b>Safari</b>, no Android o <b>Chrome</b>. Você ainda pode digitar abaixo.</div>`}
+      <button type="button" class="btn voz-mic" id="vz-mic" ${VOZ_OK ? '' : 'disabled'}>
+        <span class="voz-ponto"></span> Tocar e falar</button>
+      <p class="modal-sub" id="vz-dica">Fale como falaria para um colega: <i>“vinte caixas de arroz
+        reserva cinco quilos${comCliente ? ', para o Mercado Bom Preço' : ''}”</i>.
+        Comece cada item por um número.</p>
+      <label class="campo">O que foi entendido
+        <textarea id="vz-texto" rows="3" placeholder="Você pode corrigir este texto antes de aplicar."></textarea></label>
+      <div class="erro" id="vz-erro" style="color:var(--vermelho-txt);font-size:13px"></div>
+      <div id="vz-previa"></div>
+      <div class="modal-acoes">
+        <button type="button" class="btn" onclick="window.__fechar()">Cancelar</button>
+        <button type="button" class="btn btn-primario" id="vz-ok" disabled>Aplicar no pedido</button>
+      </div>
+    </div>`);
+
+  let analise = null;
+  const previa = () => {
+    const txt = $('#vz-texto').value.trim();
+    if (!txt) { $('#vz-previa').innerHTML = ''; $('#vz-ok').disabled = true; return; }
+    analise = vozAnalisar(txt, cat, comCliente);
+    const dud = analise.itens.filter(i => i.duvida).length;
+    $('#vz-previa').innerHTML = `
+      ${comCliente ? `<div class="voz-linha ${analise.cliente ? '' : 'duvida'}">
+        <span class="rot">Cliente</span>
+        <b>${analise.cliente ? esc(analise.cliente.x.razao_social) : 'não identificado — você escolhe na tela'}</b></div>` : ''}
+      ${analise.itens.length ? analise.itens.map(i => `<div class="voz-linha ${i.duvida ? 'duvida' : ''}">
+        <span class="rot">${i.qtd}${i.unidade ? ' ' + i.unidade : ''}</span>
+        <b>${esc(i.candidatos[0].x.descricao)}</b>
+        ${i.duvida ? '<small>parecidos demais — você escolhe na tela</small>' : ''}</div>`).join('')
+        : '<div class="voz-linha duvida"><b>Nenhum item reconhecido</b><small>Comece cada item por um número: “dez caixas de…”</small></div>'}
+      ${dud ? `<div class="info-linha">${dud} item(ns) vão entrar marcados em laranja esperando sua escolha.</div>` : ''}`;
+    $('#vz-ok').disabled = !analise.itens.length;
+  };
+  $('#vz-texto').addEventListener('input', previa);
+
+  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null, ouvindo = false;
+  $('#vz-mic')?.addEventListener('click', () => {
+    if (!Rec) return;
+    if (ouvindo) { rec.stop(); return; }
+    rec = new Rec();
+    rec.lang = 'pt-BR'; rec.continuous = true; rec.interimResults = true;
+    let pronto = '';
+    rec.onstart = () => { ouvindo = true; $('#vz-mic').classList.add('ouvindo');
+      $('#vz-mic').innerHTML = '<span class="voz-ponto"></span> Ouvindo… toque para parar'; $('#vz-erro').textContent = ''; };
+    rec.onresult = (e) => {
+      let parcial = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) pronto += e.results[i][0].transcript + ' ';
+        else parcial += e.results[i][0].transcript;
+      }
+      $('#vz-texto').value = (pronto + parcial).trim();
+    };
+    rec.onerror = (e) => { $('#vz-erro').textContent = e.error === 'not-allowed'
+      ? 'O microfone está bloqueado para este site. Libere nas permissões do navegador.'
+      : 'Microfone: ' + e.error; };
+    rec.onend = () => { ouvindo = false; $('#vz-mic').classList.remove('ouvindo');
+      $('#vz-mic').innerHTML = '<span class="voz-ponto"></span> Tocar e falar'; previa(); };
+    rec.start();
+  });
+
+  $('#vz-ok').addEventListener('click', () => {
+    if (!analise) return;
+    try { rec?.stop(); } catch {}
+    fecharModal();
+    aoAplicar(analise);
+  });
+  setTimeout(() => $('#vz-mic')?.focus(), 80);
+}
+
+/**
+ * Depois de salvar um pedido ditado: a voz acertou? Guarda a opinião junto do
+ * que foi mexido de fato. Resolve sozinho se a pergunta estiver desligada.
+ */
+function perguntarVoz(pedido, uso) {
+  const registrar = (veredito) => api('POST', '/voz/avaliacao', {
+    pedido_id: pedido.id, texto: uso.texto, veredito,
+    itens_propostos: uso.propostos, itens_duvidosos: uso.duvidosos,
+    itens_trocados: uso.trocados, itens_removidos: uso.removidos,
+    cliente_trocado: uso.clienteTrocado ? 1 : 0,
+  }).catch(() => {});
+
+  if (estado.config.voz_perguntar === '0') return registrar('');
+
+  return new Promise((resolver) => {
+    const mexidos = uso.trocados + uso.removidos;
+    abrirModal(`<h3>O ditado acertou?</h3>
+      <div class="modal-corpo">
+        <p class="modal-sub">Pedido <b>${esc(pedido.numero)}</b> salvo. A voz propôs
+          <b>${uso.propostos} item(ns)</b>${mexidos ? ` e você ajustou <b>${mexidos}</b>` : ' e você não precisou ajustar nenhum'}.
+          Sua resposta me ajuda a melhorar o reconhecimento.</p>
+        <div class="voz-votos">
+          <button type="button" class="btn" data-v="acertou">Acertou tudo</button>
+          <button type="button" class="btn" data-v="quase">Quase — ajustei algo</button>
+          <button type="button" class="btn" data-v="errou">Errou feio</button>
+        </div>
+        <div class="modal-acoes">
+          <label class="voz-nao-perguntar"><input type="checkbox" id="vz-nunca"> Não perguntar mais</label>
+          <button type="button" class="btn" data-v="">Agora não</button>
+        </div>
+      </div>`);
+    $('#modal-corpo').addEventListener('click', async (e) => {
+      const v = e.target.dataset.v;
+      if (v === undefined) return;
+      if ($('#vz-nunca')?.checked) {
+        estado.config.voz_perguntar = '0';          // para de perguntar já nesta sessão
+        // gravar a preferência é coisa de administrador; se não for, vale só até sair
+        try { await api('PUT', '/config', { voz_perguntar: '0' }); } catch {}
+      }
+      await registrar(v);
+      fecharModal();
+      resolver();
+    });
+  });
+}
+
+/* =========================================================================
    DEVOLUÇÕES — mercadoria que voltou depois do pedido faturado
    ========================================================================= */
 /**
@@ -1202,6 +1441,8 @@ function editor(tipoPadrao) {
   return async (args) => {
     const id = args[0] && args[0] !== 'novo' ? Number(args[0]) : null;
     let doc, itens = [], devs = { lista: [], resumo: { qtd: 0, valor: 0, estorno: 0 } };
+    // o que o ditado propôs e o que a pessoa mexeu depois — medida honesta do acerto
+    const vozUso = { usou: false, texto: '', propostos: 0, duvidosos: 0, trocados: 0, removidos: 0, clienteTrocado: false };
     if (id) {
       doc = await get('/pedidos/' + id);
       itens = doc.itens.map(i => ({ ...i }));
@@ -1220,14 +1461,17 @@ function editor(tipoPadrao) {
     const clientes = await get('/clientes?ativo=1&limite=1000');
     let tabelas = [], condicoes = [], produtos = [];
 
+    const botaoVoz = bloqueado ? '' : `<button class="btn" id="btn-voz">🎙️ Ditar</button>`;
     acoes(id ? `
       ${etq(doc.status)}
       <a class="btn" href="/api/pedidos/${id}/pdf" target="_blank">Ver PDF</a>
+      ${botaoVoz}
       <button class="btn" id="btn-enviar">Enviar cópia</button>
       <button class="btn" id="btn-situacao">Situação</button>
       <button class="btn" id="btn-mais">⋯</button>
       ${bloqueado ? '' : '<button class="btn btn-primario" id="btn-salvar">Salvar</button>'}`
-      : `<button class="btn btn-primario" id="btn-salvar">Salvar ${eCot ? 'cotação' : 'pedido'}</button>`);
+      : `${botaoVoz}
+      <button class="btn btn-primario" id="btn-salvar">Salvar ${eCot ? 'cotação' : 'pedido'}</button>`);
 
     pintar(`
     ${bloqueado ? `<div class="aviso-linha">Este ${eCot ? 'documento' : 'pedido'} está <b>${ETIQUETAS[doc.status][1].toLowerCase()}</b> e não pode mais ser editado.</div>` : ''}
@@ -1357,9 +1601,15 @@ function editor(tipoPadrao) {
     /* ---- itens */
     function desenharItens() {
       $('#corpo-itens').innerHTML = itens.length ? itens.map((it, i) => `
-        <tr data-i="${i}">
+        <tr data-i="${i}" class="${it._vozDuvida ? 'item-duvida' : ''}">
           <td><input value="${esc(it.codigo || '')}" data-c="codigo" ${bloqueado ? 'readonly' : ''}></td>
-          <td><input value="${esc(it.descricao || '')}" data-c="descricao" ${bloqueado ? 'readonly' : ''}></td>
+          <td><input value="${esc(it.descricao || '')}" data-c="descricao" ${bloqueado ? 'readonly' : ''}>
+            ${it._vozDuvida ? `<div class="voz-escolha">
+              <small>você disse “${esc(it._vozFalado || '')}” — confirme qual produto:</small>
+              <div class="chips">${(it._vozCandidatos || []).map((c, j) =>
+                `<button type="button" class="chip" data-voz="${i}" data-c2="${j}">${esc(c.descricao)}</button>`).join('')}
+                <button type="button" class="chip chip-ok" data-voz="${i}" data-c2="-1">manter como está</button></div>
+            </div>` : ''}</td>
           <td><input value="${esc(it.unidade || 'UN')}" data-c="unidade" ${bloqueado ? 'readonly' : ''}></td>
           <td><input type="number" step="0.001" min="0" class="dir" value="${n(it.quantidade)}" data-c="quantidade" ${bloqueado ? 'readonly' : ''}></td>
           <td><input type="number" step="0.01" min="0" class="dir" value="${n(it.preco_unit)}" data-c="preco_unit" ${bloqueado ? 'readonly' : ''}></td>
@@ -1381,7 +1631,27 @@ function editor(tipoPadrao) {
     });
     $('#corpo-itens').addEventListener('click', e => {
       const r = e.target.dataset.remover;
-      if (r !== undefined) { itens.splice(Number(r), 1); desenharItens(); }
+      if (r !== undefined) {
+        if (itens[Number(r)]?._vozFalado) vozUso.removidos++;
+        itens.splice(Number(r), 1); desenharItens(); return;
+      }
+      // resolveu um item que a voz deixou em dúvida
+      const v = e.target.dataset.voz;
+      if (v !== undefined) {
+        const it = itens[Number(v)], j = Number(e.target.dataset.c2);
+        if (!it) return;
+        if (j >= 0) {
+          const p = (it._vozCandidatos || [])[j];
+          if (p) {
+            if (p.id !== it.produto_id) vozUso.trocados++;
+            Object.assign(it, { produto_id: p.id, codigo: p.codigo, descricao: p.descricao,
+              unidade: p.unidade || it.unidade, preco_unit: n(p.preco_venda ?? p.preco_base ?? it.preco_unit),
+              ipi_pct: n(p.ipi_pct) });
+          }
+        }
+        it._vozDuvida = false;
+        desenharItens();
+      }
     });
     ['#in-desc', '#in-frete', '#in-comissao'].forEach(s => $(s).addEventListener('input', totais));
 
@@ -1442,6 +1712,52 @@ function editor(tipoPadrao) {
         ok(p.descricao + ' adicionado');
       });
     });
+    /* ---- ditado por voz ---- */
+    $('#btn-voz')?.addEventListener('click', () => {
+      // num pedido novo a voz também escolhe cliente e representada; num já aberto, só soma itens
+      const modo = (!id && !$('#sel-rep').value) ? 'pedido' : 'itens';
+      abrirVoz(modo, async (a) => {
+        vozUso.usou = true;
+        vozUso.texto = a.texto;
+
+        if (modo === 'pedido') {
+          if (a.representada_id && Number($('#sel-rep').value) !== a.representada_id) {
+            $('#sel-rep').value = a.representada_id;
+            await carregarRepresentada(false);   // traz os preços da representada certa
+          }
+          if (a.cliente) {
+            const sc = $('[name=cliente_id]');
+            if ([...sc.options].some(o => Number(o.value) === a.cliente.x.id)) {
+              sc.value = a.cliente.x.id; mostrarCliente();
+            }
+          }
+        }
+        if (!$('#sel-rep').value) return erro('Escolha a representada para o sistema trazer os preços.');
+
+        let entraram = 0;
+        for (const i of a.itens) {
+          const alvo = i.candidatos[0].x;
+          // o preço vem da tabela carregada para a representada deste pedido
+          const p = produtos.find(x => x.id === alvo.id);
+          if (!p) continue;   // produto de outra representada: não cabe neste pedido
+          const cands = i.candidatos.map(c => produtos.find(x => x.id === c.x.id)).filter(Boolean);
+          itens.push({
+            produto_id: p.id, codigo: p.codigo, descricao: p.descricao,
+            unidade: i.unidade || p.unidade, quantidade: i.qtd,
+            preco_unit: n(p.preco_venda), desconto_pct: 0, ipi_pct: n(p.ipi_pct),
+            _vozFalado: i.consulta, _vozDuvida: !!i.duvida, _vozCandidatos: cands,
+          });
+          entraram++;
+          vozUso.propostos++;
+          if (i.duvida) vozUso.duvidosos++;
+        }
+        desenharItens();
+        const fora = a.itens.length - entraram;
+        if (!entraram) erro('Nenhum item desta fala pertence à representada escolhida.');
+        else ok(`${entraram} item(ns) do ditado${fora ? ` — ${fora} ficaram de fora por serem de outra representada` : ''}.`);
+      });
+    });
+
     $('#btn-item-livre')?.addEventListener('click', () => {
       itens.push({ produto_id: null, codigo: '', descricao: '', unidade: 'UN', quantidade: 1, preco_unit: 0, desconto_pct: 0, ipi_pct: 0 });
       desenharItens();
@@ -1450,14 +1766,24 @@ function editor(tipoPadrao) {
 
     /* ---- salvar */
     $('#btn-salvar')?.addEventListener('click', async () => {
+      // item que a voz não teve certeza não vai para o cliente sem alguém confirmar
+      const pendentes = itens.filter(i => i._vozDuvida).length;
+      if (pendentes) {
+        $('#corpo-itens').querySelector('.item-duvida')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return erro(`${pendentes} item(ns) do ditado ainda esperam sua confirmação. ` +
+          'Toque no produto certo na linha laranja antes de salvar.');
+      }
       const f = dadosForm($('#form-pedido'));
-      const corpo = { ...f, tipo: doc.tipo, itens };
+      // os campos do ditado são só da tela: não vão para o banco
+      const limpos = itens.map(({ _vozDuvida, _vozCandidatos, _vozFalado, ...resto }) => resto);
+      const corpo = { ...f, tipo: doc.tipo, itens: limpos };
       // vazio = herda a % da representada (null), e não zero
       const pc = $('#in-comissao').value.trim();
       corpo.comissao_pct = pc === '' ? null : Number(pc);
       try {
         const salvo = id ? await api('PUT', '/pedidos/' + id, corpo) : await api('POST', '/pedidos', corpo);
         ok(`${eCot ? 'Cotação' : 'Pedido'} ${salvo.numero} salvo!`);
+        if (vozUso.usou) await perguntarVoz(salvo, vozUso);
         location.hash = `#/${eCot ? 'cotacao' : 'pedido'}/${salvo.id}`;
         if (id) rotear();
       } catch (e) { erro(e); }
@@ -2229,6 +2555,16 @@ telas.config = async () => {
     </div></form>
   </div></div>
 
+      <div class="cartao"><div class="cartao-tit">Ditado por voz</div><div class="cartao-corpo">
+    <p style="margin-top:0;color:var(--suave);font-size:13px">No pedido, o botão <b>🎙️ Ditar</b> ouve, casa o que
+      você falou com o cadastro e deixa tudo na tela para conferir. Item que ficar em dúvida entra em laranja
+      e o sistema não deixa salvar sem você confirmar.</p>
+    <label class="voz-nao-perguntar" style="margin:0 0 12px">
+      <input type="checkbox" id="cfg-voz" ${c.voz_perguntar !== '0' ? 'checked' : ''} ${admin ? '' : 'disabled'}>
+      Perguntar se o ditado acertou depois de salvar</label>
+    <div id="voz-relatorio"></div>
+  </div></div>
+
       <div class="cartao"><div class="cartao-tit">Pergunta de segurança
         ${estado.usuario.tem_pergunta
           ? '<span class="etq etq-verde">Cadastrada</span>'
@@ -2309,6 +2645,30 @@ telas.config = async () => {
     e.preventDefault();
     try { await api('POST', '/senha', dadosForm(e.target)); ok('Senha alterada!'); e.target.reset(); } catch (x) { erro(x); }
   });
+
+  $('#cfg-voz')?.addEventListener('change', async (e) => {
+    const v = e.target.checked ? '1' : '0';
+    estado.config.voz_perguntar = v;
+    try { await api('PUT', '/config', { voz_perguntar: v }); ok('Preferência salva.'); } catch (x) { erro(x); }
+  });
+  if (admin) {
+    get('/voz/relatorio').then(r => {
+      const el = $('#voz-relatorio'); if (!el) return;
+      if (!r.total) {
+        el.innerHTML = '<div class="info-linha">Nenhum pedido ditado ainda. Depois de alguns, aparece aqui quanto o ditado está acertando.</div>';
+        return;
+      }
+      el.innerHTML = `<div class="kpis" style="margin-bottom:10px">
+        <div class="kpi"><div class="rot">Pedidos ditados</div><div class="val">${r.total}</div></div>
+        <div class="kpi"><div class="rot">Itens que ficaram como a voz propôs</div>
+          <div class="val">${r.aproveitamento === null ? '-' : r.aproveitamento + '%'}</div>
+          <div class="obs">${r.itens.propostos} propostos • ${r.itens.trocados} trocados • ${r.itens.removidos} apagados</div></div>
+        <div class="kpi"><div class="rot">Sua avaliação</div>
+          <div class="val">${r.veredito.acertou}/${r.veredito.acertou + r.veredito.quase + r.veredito.errou || 0}</div>
+          <div class="obs">acertou tudo • ${r.veredito.quase} quase • ${r.veredito.errou} errou feio</div></div>
+      </div>`;
+    }).catch(() => {});
+  }
 
   $('#form-seguranca').addEventListener('submit', async e => {
     e.preventDefault();
