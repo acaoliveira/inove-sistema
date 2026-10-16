@@ -151,7 +151,11 @@ function analisar(texto, d) {
   const itens = fatiar(corpo).map(i => {
     const cand = melhores(i.consulta, d.produtos, p => p.descricao, 4);
     const gap = cand[0].s - (cand[1]?.s || 0);
-    return { ...i, candidatos: cand, escolhido: 0, duvida: gap < 0.08, gap };
+    // só vale mostrar alternativa que realmente concorre. Oferecer "BALA LUA DE MEL"
+    // para quem disse "melão" é ruído: confunde e derruba a confiança na tela.
+    const corte = Math.max(0.35, cand[0].s * 0.6);
+    const uteis = [cand[0], ...cand.slice(1).filter(c => c.s >= corte)];
+    return { ...i, candidatos: uteis, escolhido: 0, duvida: gap < 0.08, gap };
   });
   const cont = {};
   for (const i of itens) if (i.candidatos[0].s > 0.45) {
@@ -240,10 +244,10 @@ function desenhar() {
       <div class="nome">${esc(i.candidatos[i.escolhido].x.descricao)}</div>
       <div class="rot">você disse “${esc(i.consulta)}” • confiança ${(i.candidatos[i.escolhido].s*100).toFixed(0)}%
         ${i.duvida ? ' • <b>parecidos demais, escolha qual</b>' : ''}</div>
-      <div class="chips">
+      ${i.candidatos.length > 1 ? `<div class="chips">
         ${i.candidatos.map((c, j) => `<button class="chip ${j === i.escolhido ? 'on' : ''}"
           data-i="${k}" data-j="${j}">${esc(encurta(c.x.descricao))}</button>`).join('')}
-      </div>
+      </div>` : '<div class="rot" style="margin-top:6px">sem outro produto parecido no catálogo</div>'}
       <div class="aval">
         <button class="sim" data-ok="1" data-i="${k}">acertou</button>
         <button class="nao" data-ok="0" data-i="${k}">errou</button>
