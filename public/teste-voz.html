@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teste de pedido por voz</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#f6f5f2;color:#1c1b19;font-size:15px;line-height:1.5;
+    font-family:Geist,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+  .topo{background:#1b1a18;color:#f6f5f2;padding:18px 20px}
+  .topo h1{margin:0;font-size:18px;font-weight:600}
+  .topo p{margin:4px 0 0;font-size:13px;color:#a8a49c}
+  main{padding:16px;max-width:680px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+  .cartao{background:#fff;border:1px solid #e8e6e1;border-radius:12px;padding:16px}
+  .cartao h2{margin:0 0 10px;font-size:13px;font-weight:600;color:#6f6b64;text-transform:uppercase;letter-spacing:.06em}
+  button{font:inherit;cursor:pointer;border-radius:10px;border:1px solid #e1ded8;background:#fff;color:#1c1b19;padding:10px 14px}
+  .mic{width:100%;height:72px;font-size:17px;font-weight:600;background:#1c1b19;color:#fff;border-color:#1c1b19;
+    display:flex;align-items:center;justify-content:center;gap:10px}
+  .mic.ouvindo{background:#b3362b;border-color:#b3362b;animation:pulsa 1.1s infinite}
+  @keyframes pulsa{50%{opacity:.75}}
+  textarea{width:100%;min-height:76px;padding:12px;border:1px solid #e1ded8;border-radius:10px;font:inherit;resize:vertical}
+  .linha{display:flex;gap:8px;flex-wrap:wrap}
+  .item{border:1px solid #e8e6e1;border-radius:10px;padding:12px;margin-bottom:10px;background:#faf9f7}
+  .item.duvida{border-color:#d99a3d;background:#fbefdc}
+  .item .qtd{font-weight:600;font-size:16px}
+  .item .nome{font-weight:600;margin:2px 0}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .chip{font-size:13px;padding:7px 10px;border:1px solid #e1ded8;border-radius:20px;background:#fff}
+  .chip.on{background:#1c1b19;color:#fff;border-color:#1c1b19}
+  .aval{display:flex;gap:6px;margin-top:10px}
+  .aval button{flex:1;padding:8px;font-size:13px}
+  .aval button.sim.on{background:#1d7a55;color:#fff;border-color:#1d7a55}
+  .aval button.nao.on{background:#b3362b;color:#fff;border-color:#b3362b}
+  .rot{font-size:12px;color:#8a857d}
+  .placar{background:#1b1a18;color:#f6f5f2}
+  .placar h2{color:#a8a49c}
+  .placar .num{font-size:30px;font-weight:600}
+  pre{white-space:pre-wrap;word-break:break-word;background:#efede8;padding:12px;border-radius:8px;
+    font-size:12.5px;font-family:'Geist Mono',Consolas,monospace;margin:0}
+  .erro{color:#a3271d;font-size:13.5px}
+  .aviso{background:#fbefdc;border:1px solid #e8d9b8;border-radius:10px;padding:12px;font-size:13.5px}
+</style>
+</head>
+<body>
+<div class="topo">
+  <h1>Teste de pedido por voz</h1>
+  <p>Página de teste — não salva nada, não altera nenhum pedido.</p>
+</div>
+
+<main>
+  <div class="cartao">
+    <h2>1. Fale o pedido</h2>
+    <button class="mic" id="mic">🎙️ Tocar e falar</button>
+    <p class="rot" id="estado" style="margin:10px 0 0">Toque no botão e fale como você falaria para um colega.<br>
+      Ex.: <i>“vinte caixas de arroz mirarroz reserva cinco quilos para o Bruxelas”</i></p>
+    <div class="erro" id="erro"></div>
+  </div>
+
+  <div class="cartao">
+    <h2>2. O que o celular ouviu</h2>
+    <textarea id="texto" placeholder="O texto reconhecido aparece aqui. Você pode corrigir e tocar em Interpretar para testar só o casamento."></textarea>
+    <div class="linha" style="margin-top:10px">
+      <button id="interpretar">Interpretar</button>
+      <button id="limpar">Limpar</button>
+    </div>
+  </div>
+
+  <div class="cartao" id="saida" style="display:none">
+    <h2>3. O que o sistema entendeu</h2>
+    <div id="resultado"></div>
+  </div>
+
+  <div class="cartao placar">
+    <h2>Placar do teste</h2>
+    <div class="num" id="placar">0 de 0</div>
+    <p class="rot" style="color:#a8a49c;margin:6px 0 10px">Marque cada item como certo ou errado. No fim, toque em copiar e me mande.</p>
+    <button id="copiar">Copiar resumo do teste</button>
+  </div>
+
+  <div class="aviso" id="semSuporte" style="display:none">
+    Este navegador não reconhece voz. No iPhone use o <b>Safari</b>; no Android use o <b>Chrome</b>.
+    Você ainda pode digitar no campo acima e tocar em Interpretar.
+  </div>
+</main>
+
+<script>
+/* ===================== casador: fala -> catálogo ===================== */
+const semAcento = (s) => String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'');
+const NUM = { um:1,uma:1,dois:2,duas:2,tres:3,quatro:4,cinco:5,seis:6,sete:7,oito:8,nove:9,dez:10,
+  onze:11,doze:12,treze:13,quatorze:14,catorze:14,quinze:15,dezesseis:16,dezessete:17,dezoito:18,dezenove:19,
+  vinte:20,trinta:30,quarenta:40,cinquenta:50,sessenta:60,setenta:70,oitenta:80,noventa:90,cem:100,cento:100,duzentos:200 };
+const UNI = { caixa:'CX',caixas:'CX',cx:'CX',fardo:'FD',fardos:'FD',fd:'FD',
+  quilo:'KG',quilos:'KG',kg:'KG',kilo:'KG',kilos:'KG',unidade:'UN',unidades:'UN',un:'UN',pacote:'UN',pacotes:'UN' };
+
+function normalizar(s) {
+  let t = semAcento(String(s||'')).toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  const p = t.split(' '), out = [];
+  for (let i = 0; i < p.length; i++) {
+    if (NUM[p[i]] !== undefined) {
+      let v = NUM[p[i]];
+      if (v >= 20 && v <= 90 && p[i+1] === 'e' && NUM[p[i+2]] !== undefined && NUM[p[i+2]] < 10) { v += NUM[p[i+2]]; i += 2; }
+      out.push(String(v));
+    } else out.push(p[i]);
+  }
+  t = out.join(' ');
+  t = t.replace(/(\d+)\s*(gramas|grama|gr|g)\b/g,'$1g')
+       .replace(/(\d+)\s+e\s+meio\s*(kg|quilos?|k)\b/g,'$1e5kg')
+       .replace(/(\d+)\s*(quilos|quilo|kilos|kilo|kg|k)\b/g,'$1kg')
+       .replace(/(\d+)\s+(\d+)\s*kg\b/g,'$1e$2kg');
+  return t.replace(/\s+/g,' ').trim();
+}
+const tokens = (s) => normalizar(s).split(' ').filter(Boolean);
+const TAM = /^(\d+)(g|kg|ml|l)$|^(cx|fd)?\d+x\d+(g|kg|ml|l)$|^\d+e\d+kg$/;
+const tamanhos = (s) => tokens(s).filter(t => TAM.test(t));
+function bigramas(s){ const t=normalizar(s).replace(/ /g,''),r=[]; for(let i=0;i<t.length-1;i++) r.push(t.slice(i,i+2)); return r; }
+function dice(a,b){ const A=bigramas(a),B=bigramas(b); if(!A.length||!B.length) return 0;
+  const m=new Map(); for(const g of A) m.set(g,(m.get(g)||0)+1);
+  let c=0; for(const g of B){ const n=m.get(g)||0; if(n>0){c++;m.set(g,n-1);} }
+  return (2*c)/(A.length+B.length); }
+function pontuar(consulta, alvo) {
+  const tc = tokens(consulta), ta = new Set(tokens(alvo));
+  if (!tc.length) return 0;
+  const cobertura = tc.filter(t => ta.has(t)).length / tc.length;
+  let s = 0.55*cobertura + 0.45*dice(consulta, alvo);
+  const tf = tamanhos(consulta), tp = tamanhos(alvo);
+  if (tf.length && tp.length) s *= tf.some(x => tp.includes(x)) ? 1.15 : 0.40;
+  return Math.min(1, s);
+}
+const melhores = (c, lista, campo, n=4) =>
+  lista.map(x => ({ x, s: pontuar(c, campo(x)) })).sort((a,b) => b.s-a.s).slice(0, n);
+
+function fatiar(txt) {
+  const t = normalizar(txt), re = /(?:^|\s)(\d+)\s+/g, cortes = []; let m;
+  while ((m = re.exec(t)) !== null) cortes.push({ i: m.index === 0 ? 0 : m.index+1, q: Number(m[1]) });
+  return cortes.map((c, k) => {
+    const fim = k+1 < cortes.length ? cortes[k+1].i : t.length;
+    let corpo = t.slice(c.i, fim).replace(/^\d+\s*/,'').trim(), unidade = '';
+    const pu = corpo.split(' ')[0];
+    if (UNI[pu]) { unidade = UNI[pu]; corpo = corpo.slice(pu.length).trim(); }
+    corpo = corpo.replace(/^(de|do|da|dos|das)\s+/,'');
+    return { qtd: c.q, unidade, consulta: corpo };
+  }).filter(i => i.consulta.length > 2);
+}
+
+function analisar(texto, d) {
+  const t = normalizar(texto);
+  const mc = t.match(/\b(?:para|pra|pro|cliente)\s+(?:o|a|os|as)?\s*([a-z0-9 ]{3,60})$/);
+  const corpo = mc ? t.slice(0, mc.index) : t;
+  const cli = mc ? melhores(mc[1], d.clientes, c => (c.fantasia ? c.fantasia+' ' : '') + c.razao, 4) : [];
+  const itens = fatiar(corpo).map(i => {
+    const cand = melhores(i.consulta, d.produtos, p => p.descricao, 4);
+    const gap = cand[0].s - (cand[1]?.s || 0);
+    return { ...i, candidatos: cand, escolhido: 0, duvida: gap < 0.08, gap };
+  });
+  const cont = {};
+  for (const i of itens) if (i.candidatos[0].s > 0.45) {
+    const r = i.candidatos[0].x.representada_id; cont[r] = (cont[r]||0)+1;
+  }
+  const repId = Object.entries(cont).sort((a,b)=>b[1]-a[1])[0]?.[0];
+  return { cliente: cli[0], candidatosCliente: cli, itens,
+    representada: d.representadas.find(r => String(r.id) === String(repId)) };
+}
+
+/* ===================== tela ===================== */
+const $ = (s) => document.querySelector(s);
+let dados = null, analise = null;
+const notas = [];   // {fala, item, escolhido, acertou}
+
+async function carregar() {
+  const [p, c, r] = await Promise.all([
+    fetch('/api/produtos?limite=2000').then(x => x.json()),
+    fetch('/api/clientes?limite=2000').then(x => x.json()),
+    fetch('/api/representadas').then(x => x.json()),
+  ]);
+  dados = {
+    produtos: p.map(x => ({ id:x.id, descricao:x.descricao, unidade:x.unidade, representada_id:x.representada_id })),
+    clientes: c.map(x => ({ id:x.id, razao:x.razao_social, fantasia:x.nome_fantasia })),
+    representadas: r.map(x => ({ id:x.id, nome:x.nome })),
+  };
+  $('#estado').innerHTML = `Catálogo carregado: <b>${dados.produtos.length} produtos</b>, ` +
+    `<b>${dados.clientes.length} clientes</b>. Toque no botão e fale.`;
+}
+carregar().catch(() => {
+  $('#erro').textContent = 'Não consegui ler o catálogo. Entre no sistema primeiro e abra esta página de novo.';
+});
+
+/* ---- microfone ---- */
+const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!Rec) { $('#semSuporte').style.display = 'block'; $('#mic').disabled = true; }
+let rec = null, ouvindo = false;
+$('#mic').addEventListener('click', () => {
+  if (!Rec) return;
+  if (ouvindo) { rec.stop(); return; }
+  rec = new Rec();
+  rec.lang = 'pt-BR'; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+  let finalizado = '';
+  rec.onstart = () => { ouvindo = true; $('#mic').classList.add('ouvindo');
+    $('#mic').textContent = '⏹️ Falando… toque para parar'; $('#erro').textContent = ''; };
+  rec.onresult = (e) => {
+    let parcial = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) finalizado += e.results[i][0].transcript + ' ';
+      else parcial += e.results[i][0].transcript;
+    }
+    $('#texto').value = (finalizado + parcial).trim();
+  };
+  rec.onerror = (e) => { $('#erro').textContent = 'Microfone: ' + e.error +
+    (e.error === 'not-allowed' ? ' — autorize o microfone para este site nas permissões do navegador.' : ''); };
+  rec.onend = () => { ouvindo = false; $('#mic').classList.remove('ouvindo');
+    $('#mic').textContent = '🎙️ Tocar e falar'; if ($('#texto').value.trim()) interpretar(); };
+  rec.start();
+});
+
+$('#interpretar').addEventListener('click', interpretar);
+$('#limpar').addEventListener('click', () => { $('#texto').value = ''; $('#saida').style.display = 'none'; });
+
+function interpretar() {
+  if (!dados) return;
+  const txt = $('#texto').value.trim();
+  if (!txt) return;
+  analise = analisar(txt, dados);
+  desenhar();
+}
+
+function desenhar() {
+  const a = analise;
+  const cli = a.cliente && a.cliente.s > 0.4
+    ? `<div class="item"><div class="rot">Cliente</div><div class="nome">${esc(a.cliente.x.razao)}</div>
+       <div class="rot">confiança ${(a.cliente.s*100).toFixed(0)}%</div></div>`
+    : `<div class="item duvida"><div class="rot">Cliente</div><div class="nome">não identificado</div>
+       <div class="rot">diga “… para o &lt;nome do cliente&gt;” no fim da frase</div></div>`;
+  const rep = `<div class="item"><div class="rot">Representada</div>
+    <div class="nome">${a.representada ? esc(a.representada.nome) : 'não identificada'}</div>
+    <div class="rot">deduzida pelos produtos</div></div>`;
+
+  const itens = a.itens.length ? a.itens.map((i, k) => `
+    <div class="item ${i.duvida ? 'duvida' : ''}" data-i="${k}">
+      <div class="qtd">${i.qtd}${i.unidade ? ' ' + i.unidade : ''}</div>
+      <div class="nome">${esc(i.candidatos[i.escolhido].x.descricao)}</div>
+      <div class="rot">você disse “${esc(i.consulta)}” • confiança ${(i.candidatos[i.escolhido].s*100).toFixed(0)}%
+        ${i.duvida ? ' • <b>parecidos demais, escolha qual</b>' : ''}</div>
+      <div class="chips">
+        ${i.candidatos.map((c, j) => `<button class="chip ${j === i.escolhido ? 'on' : ''}"
+          data-i="${k}" data-j="${j}">${esc(encurta(c.x.descricao))}</button>`).join('')}
+      </div>
+      <div class="aval">
+        <button class="sim" data-ok="1" data-i="${k}">acertou</button>
+        <button class="nao" data-ok="0" data-i="${k}">errou</button>
+      </div>
+    </div>`).join('')
+    : '<div class="item duvida">Nenhum item reconhecido. Comece cada item por um número: “dez caixas de…”.</div>';
+
+  $('#resultado').innerHTML = cli + rep + itens;
+  $('#saida').style.display = 'block';
+
+  document.querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+    analise.itens[+b.dataset.i].escolhido = +b.dataset.j;
+    analise.itens[+b.dataset.i].trocado = true;
+    desenhar();
+  }));
+  document.querySelectorAll('.aval button').forEach(b => b.addEventListener('click', () => {
+    const i = analise.itens[+b.dataset.i];
+    notas.push({ fala: i.consulta, escolhido: i.candidatos[i.escolhido].x.descricao,
+      primeiro: i.candidatos[0].x.descricao, trocado: !!i.trocado, duvida: i.duvida, acertou: b.dataset.ok === '1' });
+    b.classList.add('on');
+    b.parentElement.querySelectorAll('button').forEach(x => x.disabled = true);
+    placar();
+  }));
+}
+function placar() {
+  const c = notas.filter(n => n.acertou).length;
+  $('#placar').textContent = `${c} de ${notas.length}`;
+}
+$('#copiar').addEventListener('click', async () => {
+  const linhas = notas.map(n => `${n.acertou ? 'OK ' : 'ERRO'} | falei: ${n.fala} | veio: ${n.primeiro}` +
+    (n.trocado ? ` | troquei para: ${n.escolhido}` : '') + (n.duvida ? ' | marcado como duvidoso' : ''));
+  const txt = `TESTE DE PEDIDO POR VOZ\n${notas.filter(n=>n.acertou).length} de ${notas.length} itens certos\n\n` + linhas.join('\n');
+  try { await navigator.clipboard.writeText(txt); alert('Resumo copiado. Cole na conversa.'); }
+  catch { prompt('Copie este texto:', txt); }
+});
+
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const encurta = (s) => String(s).length > 34 ? String(s).slice(0, 33) + '…' : String(s);
+</script>
+</body>
+</html>
