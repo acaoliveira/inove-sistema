@@ -186,6 +186,7 @@ async function iniciar() {
     $('#avatar-usuario').textContent = iniciais(r.usuario.nome);
     estado.representadas = await get('/representadas');
     try { estado.usuarios = await get('/usuarios'); } catch { estado.usuarios = []; }
+    contarAgenda();
     rotear();
   } catch { mostrarLogin(); }
 }
@@ -321,6 +322,7 @@ const iniciais = (nome) => {
 /** Grupo do menu a que cada tela pertence — aparece acima do título */
 const SECOES = {
   painel: 'Vendas', faturamento: 'Vendas', relatorios: 'Vendas', comissoes: 'Vendas',
+  agenda: 'Lançamentos',
   pedidos: 'Lançamentos', cotacoes: 'Lançamentos', pedido: 'Lançamentos', cotacao: 'Lançamentos',
   clientes: 'Cadastros', produtos: 'Cadastros', representadas: 'Cadastros',
   metas: 'Planejamento', historico: 'Planejamento', config: 'Sistema',
@@ -473,6 +475,7 @@ telas.painel = async () => {
   const repsAno = [...d.por_representada].filter(r => r.realizado_ano > 0).sort((a, b) => b.realizado_ano - a.realizado_ano);
 
   pintar(`
+  <div id="painel-agenda"></div>
   <div class="kpis k6">
     <div class="kpi faixa-azul"><div class="rot">Hoje — ${dataBR(d.dia.data)}</div>
       <div class="val">${dinheiro(d.dia.realizado)}</div>
@@ -595,6 +598,242 @@ telas.painel = async () => {
   };
   $$('#f-modo button').forEach(b => b.addEventListener('click', () => aplicar(b.dataset.modo)));
   ['#f-ano', '#f-mes', '#f-rep', '#f-de', '#f-ate'].forEach(s => $(s).addEventListener('change', () => aplicar()));
+
+  // compromissos de hoje e amanhã: abrir o sistema de manhã já mostra o dia
+  get('/agenda/resumo').then(r => {
+    const alvo = $('#painel-agenda'); if (!alvo) return;
+    const abertos = (l) => l.filter(c => c.situacao === 'marcado');
+    const hj = abertos(r.hoje), am = abertos(r.amanha);
+    const pend = r.atrasados.length + r.retornos.length;
+    if (!hj.length && !am.length && !pend) return;
+    const item = (c, quando) => `<a class="comp" href="#/agenda?dia=${c.data}">
+      <div class="comp-hora">${quando}<small>${c.hora || ''}</small></div>
+      <div class="comp-corpo"><b>${esc(c.assunto)}</b>
+        <small>${esc(c.cliente_fantasia || c.cliente_nome || 'Sem cliente')}</small></div></a>`;
+    alvo.innerHTML = `<div class="cartao"><div class="cartao-tit">Compromissos
+        <a href="#/agenda">Abrir agenda</a></div>
+      <div class="cartao-corpo sem-pad"><div class="lista-comp">
+        ${hj.map(c => item(c, 'hoje')).join('')}
+        ${am.map(c => item(c, 'amanhã')).join('')}
+        ${!hj.length && !am.length ? '<div class="vazio"><b>Nada marcado para hoje nem amanhã</b>A agenda está livre.</div>' : ''}
+        ${pend ? `<a class="comp atrasado" href="#/agenda">
+          <div class="comp-hora">!</div>
+          <div class="comp-corpo"><b>${pend} compromisso(s) precisam de atenção</b>
+            <small>passaram da data sem desfecho ou têm retorno vencido</small></div></a>` : ''}
+      </div></div></div>`;
+  }).catch(() => {});
+};
+
+/* =========================================================================
+   AGENDA — compromissos com cliente, dentro do sistema
+   ========================================================================= */
+const DIAS_SEM = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+const MES_LONGO = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+const f2 = (x) => String(x).padStart(2, '0');
+const isoDe = (d) => `${d.getFullYear()}-${f2(d.getMonth() + 1)}-${f2(d.getDate())}`;
+const deIso = (s) => { const [a, m, d] = String(s).split('-').map(Number); return new Date(a, m - 1, d); };
+const maisDias = (iso, n) => { const d = deIso(iso); d.setDate(d.getDate() + n); return isoDe(d); };
+/** "hoje", "amanhã", "ontem" ou "qua, 12/11" — data que a pessoa lê sem contar */
+function dataAmigavel(iso) {
+  const h = hojeISO();
+  if (iso === h) return 'hoje';
+  if (iso === maisDias(h, 1)) return 'amanhã';
+  if (iso === maisDias(h, -1)) return 'ontem';
+  const d = deIso(iso);
+  return `${DIAS_SEM[d.getDay()]}, ${f2(d.getDate())}/${f2(d.getMonth() + 1)}`;
+}
+const ETQ_SIT = { marcado: ['etq-azul', 'Marcado'], realizado: ['etq-verde', 'Realizado'], cancelado: ['etq-cinza', 'Cancelado'] };
+const etqSit = (s) => { const [c, t] = ETQ_SIT[s] || ETQ_SIT.marcado; return `<span class="etq ${c}">${t}</span>`; };
+
+/** Contador de compromissos de hoje ao lado de "Agenda" no menu */
+async function contarAgenda() {
+  const el = $('#menu-agenda'); if (!el) return;
+  try {
+    const r = await get('/agenda/resumo');
+    const n = r.hoje.filter(c => c.situacao === 'marcado').length;
+    el.textContent = n || ''; el.classList.toggle('oculto', !n);
+  } catch { el.classList.add('oculto'); }
+}
+
+/** Formulário de compromisso. `c` nulo = novo. */
+function formCompromisso(c, dataPadrao, aoSalvar) {
+  const novo = !c;
+  c = c || { data: dataPadrao || hojeISO(), hora: '', assunto: '', situacao: 'marcado', retorno_em: '' };
+  abrirModal(`<h3>${novo ? 'Novo compromisso' : 'Compromisso'}</h3>
+    <form id="form-comp" class="modal-corpo">
+      <div class="grade g3">
+        <label class="campo">Data *<input type="date" name="data" value="${esc(c.data)}" required></label>
+        <label class="campo">Hora<input type="time" name="hora" value="${esc(c.hora || '')}">
+          <small class="ajuda">Em branco = sem hora marcada</small></label>
+        <label class="campo">Situação<select name="situacao">
+          ${Object.entries(ETQ_SIT).map(([v, [, t]]) =>
+            `<option value="${v}" ${c.situacao === v ? 'selected' : ''}>${t}</option>`).join('')}
+        </select></label>
+      </div>
+      <label class="campo">Cliente<select name="cliente_id" id="comp-cli"><option value="">Sem cliente</option></select>
+        <small class="ajuda">Deixe em branco para compromisso que não é de cliente (feira, viagem).</small></label>
+      <label class="campo">Assunto *
+        <input name="assunto" value="${esc(c.assunto)}" required minlength="2"
+          placeholder="Apresentar linha nova, fechar pedido do mês, cobrar retorno…"></label>
+      <label class="campo">Voltar a procurar em
+        <input type="date" name="retorno_em" value="${esc(c.retorno_em || '')}">
+        <small class="ajuda">Opcional. Na data, o cliente reaparece na agenda como lembrete.</small></label>
+      <div class="modal-acoes">
+        ${novo ? '' : '<button type="button" class="btn btn-perigo" id="comp-apagar">Apagar</button>'}
+        <button type="button" class="btn" onclick="window.__fechar()">Cancelar</button>
+        <button class="btn btn-primario">${novo ? 'Marcar' : 'Salvar'}</button>
+      </div>
+    </form>`);
+
+  get('/clientes?ativo=1&limite=2000').then(lista => {
+    const sel = $('#comp-cli'); if (!sel) return;
+    sel.innerHTML = '<option value="">Sem cliente</option>' + lista.map(x =>
+      `<option value="${x.id}" ${x.id === c.cliente_id ? 'selected' : ''}>${esc(x.nome_fantasia || x.razao_social)}${x.cidade ? ' — ' + esc(x.cidade) : ''}</option>`).join('');
+  }).catch(() => {});
+
+  $('#form-comp').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const corpo = dadosForm(e.target);
+    corpo.cliente_id = corpo.cliente_id ? Number(corpo.cliente_id) : null;
+    try {
+      await (novo ? api('POST', '/agenda', corpo) : api('PUT', '/agenda/' + c.id, corpo));
+      fecharModal(); ok(novo ? 'Compromisso marcado.' : 'Compromisso salvo.');
+      contarAgenda(); aoSalvar?.();
+    } catch (x) { erro(x); }
+  });
+  $('#comp-apagar')?.addEventListener('click', async () => {
+    if (!confirm(`Apagar o compromisso “${c.assunto}”?`)) return;
+    try { await api('DELETE', '/agenda/' + c.id); fecharModal(); ok('Compromisso apagado.'); contarAgenda(); aoSalvar?.(); }
+    catch (x) { erro(x); }
+  });
+}
+
+telas.agenda = async () => {
+  titulo('Agenda');
+  const q = new URLSearchParams(location.hash.split('?')[1] || '');
+  const dia = /^\d{4}-\d{2}-\d{2}$/.test(q.get('dia') || '') ? q.get('dia') : hojeISO();
+  const base = deIso(dia);
+  const ano = base.getFullYear(), mes = base.getMonth();            // mês mostrado no calendário
+  const primeiro = isoDe(new Date(ano, mes, 1));
+  const ultimo = isoDe(new Date(ano, mes + 1, 0));
+
+  acoes(`<button class="btn btn-primario" id="btn-novo-comp">+ Novo compromisso</button>`);
+
+  const [d, resumo] = await Promise.all([
+    get(`/agenda?de=${primeiro}&ate=${maisDias(ultimo, 60)}`),
+    get('/agenda/resumo'),
+  ]);
+  const porDia = {};
+  for (const c of d.lista) (porDia[c.data] ||= []).push(c);
+
+  const nomeCli = (c) => c.cliente_nome ? (c.cliente_fantasia || c.cliente_nome) : 'Sem cliente';
+  const linha = (c) => `<div class="comp ${c.situacao}" data-abrir="${c.id}">
+      <div class="comp-hora">${c.hora || '—'}</div>
+      <div class="comp-corpo">
+        <b>${esc(c.assunto)}</b>
+        <small>${esc(nomeCli(c))}${c.cliente_telefone ? ' • ' + esc(c.cliente_telefone) : ''}</small>
+      </div>
+      <div class="comp-lado">${etqSit(c.situacao)}
+        ${c.situacao === 'marcado' ? `<div class="comp-botoes">
+          <button class="btn btn-peq" data-sit="realizado" data-id="${c.id}">Realizado</button>
+          <button class="btn btn-peq" data-sit="cancelado" data-id="${c.id}">Cancelar</button></div>` : ''}
+      </div>
+    </div>`;
+
+  // calendário do mês: ponto no dia que tem compromisso marcado
+  const inicioGrade = new Date(ano, mes, 1 - new Date(ano, mes, 1).getDay());
+  const celulas = [];
+  for (let i = 0; i < 42; i++) {
+    const dt = new Date(inicioGrade); dt.setDate(inicioGrade.getDate() + i);
+    const iso = isoDe(dt);
+    const doMes = dt.getMonth() === mes;
+    const lista = (porDia[iso] || []).filter(c => c.situacao !== 'cancelado');
+    celulas.push(`<button type="button" class="cal-dia${doMes ? '' : ' fora'}${iso === hojeISO() ? ' hoje' : ''}${iso === dia ? ' sel' : ''}"
+      data-dia="${iso}" aria-label="${iso}">${dt.getDate()}${lista.length
+        ? `<span class="cal-ponto">${lista.length > 1 ? lista.length : ''}</span>` : ''}</button>`);
+  }
+
+  const doDia = (porDia[dia] || []);
+  const seguir = d.lista.filter(c => c.data > dia && c.situacao === 'marcado').slice(0, 6);
+  const alertas = [...resumo.atrasados, ...resumo.retornos.filter(r => !resumo.atrasados.some(a => a.id === r.id))];
+
+  pintar(`
+  ${alertas.length ? `<div class="cartao"><div class="cartao-tit">Precisam de atenção
+      <span style="font-weight:400;color:var(--suave);font-size:12.5px">${alertas.length} item(ns)</span></div>
+    <div class="cartao-corpo sem-pad"><div class="lista-comp">
+      ${resumo.atrasados.map(c => `<div class="comp atrasado" data-abrir="${c.id}">
+        <div class="comp-hora">${dataAmigavel(c.data)}</div>
+        <div class="comp-corpo"><b>${esc(c.assunto)}</b><small>${esc(nomeCli(c))} — passou da data e continua marcado</small></div>
+        <div class="comp-lado"><div class="comp-botoes">
+          <button class="btn btn-peq" data-sit="realizado" data-id="${c.id}">Realizado</button>
+          <button class="btn btn-peq" data-sit="cancelado" data-id="${c.id}">Cancelar</button></div></div></div>`).join('')}
+      ${resumo.retornos.filter(r => !resumo.atrasados.some(a => a.id === r.id)).map(c => `<div class="comp retorno" data-abrir="${c.id}">
+        <div class="comp-hora">${dataAmigavel(c.retorno_em)}</div>
+        <div class="comp-corpo"><b>Voltar a procurar ${esc(nomeCli(c))}</b><small>combinado em ${dataBR(c.data)} — ${esc(c.assunto)}</small></div>
+        <div class="comp-lado"><button class="btn btn-peq btn-primario" data-remarcar="${c.cliente_id || ''}">Marcar visita</button></div></div>`).join('')}
+    </div></div></div>` : ''}
+
+  <div class="agenda-grade">
+    <div class="cartao">
+      <div class="cartao-tit cal-topo">
+        <button type="button" class="btn btn-peq" id="cal-ant">‹</button>
+        <b>${MES_LONGO[mes]} ${ano}</b>
+        <button type="button" class="btn btn-peq" id="cal-prox">›</button>
+      </div>
+      <div class="cartao-corpo">
+        <div class="cal-sem">${DIAS_SEM.map(s => `<span>${s}</span>`).join('')}</div>
+        <div class="cal-grade">${celulas.join('')}</div>
+        <button type="button" class="btn btn-peq btn-bloco" id="cal-hoje" style="margin-top:10px">Ir para hoje</button>
+      </div>
+    </div>
+
+    <div class="coluna">
+      <div class="cartao"><div class="cartao-tit">${dataAmigavel(dia) === 'hoje' ? 'Hoje' : 'Dia'} — ${dataBR(dia)}
+          <span style="font-weight:400;color:var(--suave);font-size:12.5px">${doDia.length} compromisso(s)</span></div>
+        <div class="cartao-corpo sem-pad"><div class="lista-comp">
+          ${doDia.length ? doDia.map(linha).join('')
+            : '<div class="vazio"><b>Nada marcado neste dia</b>Toque em “Novo compromisso” para agendar.</div>'}
+        </div></div></div>
+
+      <div class="cartao"><div class="cartao-tit">A seguir</div>
+        <div class="cartao-corpo sem-pad"><div class="lista-comp">
+          ${seguir.length ? seguir.map(c => `<div class="comp" data-abrir="${c.id}">
+            <div class="comp-hora">${dataAmigavel(c.data)}<small>${c.hora || ''}</small></div>
+            <div class="comp-corpo"><b>${esc(c.assunto)}</b><small>${esc(nomeCli(c))}</small></div></div>`).join('')
+            : '<div class="vazio"><b>Nada marcado daqui para a frente</b>A agenda está livre.</div>'}
+        </div></div></div>
+    </div>
+  </div>`);
+
+  const irPara = (novoDia) => { location.hash = '#/agenda?dia=' + novoDia; rotear(); };
+  $('#cal-ant').addEventListener('click', () => irPara(isoDe(new Date(ano, mes - 1, 1))));
+  $('#cal-prox').addEventListener('click', () => irPara(isoDe(new Date(ano, mes + 1, 1))));
+  $('#cal-hoje').addEventListener('click', () => irPara(hojeISO()));
+  $$('.cal-dia').forEach(b => b.addEventListener('click', () => irPara(b.dataset.dia)));
+  $('#btn-novo-comp').addEventListener('click', () => formCompromisso(null, dia, rotear));
+
+  $('#tela').addEventListener('click', async (e) => {
+    const sit = e.target.dataset.sit;
+    if (sit) {
+      e.stopPropagation();
+      try { await api('POST', `/agenda/${e.target.dataset.id}/situacao`, { situacao: sit });
+        ok(sit === 'realizado' ? 'Marcado como realizado.' : 'Compromisso cancelado.');
+        contarAgenda(); rotear(); } catch (x) { erro(x); }
+      return;
+    }
+    const rem = e.target.dataset.remarcar;
+    if (rem !== undefined) {
+      e.stopPropagation();
+      formCompromisso({ data: hojeISO(), hora: '', assunto: '', situacao: 'marcado',
+        retorno_em: '', cliente_id: Number(rem) || null }, hojeISO(), rotear);
+      return;
+    }
+    const alvo = e.target.closest('[data-abrir]');
+    if (alvo) {
+      try { formCompromisso(await get('/agenda/' + alvo.dataset.abrir), dia, rotear); } catch (x) { erro(x); }
+    }
+  });
 };
 
 /* =========================================================================
