@@ -221,6 +221,24 @@ CREATE TABLE IF NOT EXISTS voz_avaliacoes (
 );
 CREATE INDEX IF NOT EXISTS idx_voz_data ON voz_avaliacoes(criado_em);
 
+-- Compromissos com cliente. Agenda do representante, dentro do sistema: sem
+-- e-mail, sem integração, sem convite. O retorno_em é o "voltar a procurar":
+-- quando chega a data, o cliente reaparece na agenda sozinho.
+CREATE TABLE IF NOT EXISTS compromissos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  data TEXT NOT NULL,                           -- AAAA-MM-DD
+  hora TEXT DEFAULT '',                         -- HH:MM; vazio = sem hora marcada
+  cliente_id INTEGER REFERENCES clientes(id) ON DELETE SET NULL,
+  assunto TEXT NOT NULL DEFAULT '',
+  situacao TEXT NOT NULL DEFAULT 'marcado',     -- marcado | realizado | cancelado
+  retorno_em TEXT DEFAULT '',                   -- data para procurar de novo
+  usuario_id INTEGER REFERENCES usuarios(id),
+  criado_em TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  atualizado_em TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_compromissos_data ON compromissos(data);
+CREATE INDEX IF NOT EXISTS idx_compromissos_retorno ON compromissos(retorno_em);
+
 CREATE TABLE IF NOT EXISTS config (
   chave TEXT PRIMARY KEY,
   valor TEXT NOT NULL DEFAULT ''
