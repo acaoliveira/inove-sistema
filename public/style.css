@@ -487,6 +487,38 @@ tr.item-duvida td{background:var(--laranja-claro)}
 .itens-pedido input:hover{border-color:var(--borda-campo)}
 .itens-pedido input:focus{background:var(--branco)}
 .itens-pedido input.mono{font-family:'Geist Mono',monospace;font-size:12.5px}
+
+/* No celular a tabela de itens nao cabe: 9 colunas em 390px cortam descricao,
+   quantidade e preco. Cada item vira um cartao com os campos empilhados e o
+   rotulo em cima — o mesmo dado, legivel e com area de toque de verdade. */
+@media (max-width:760px){
+  .itens-pedido thead{display:none}
+  .itens-pedido,.itens-pedido tbody,.itens-pedido tr,.itens-pedido td{display:block;width:auto}
+  .itens-pedido tbody tr{position:relative;margin:12px;padding:12px;background:var(--branco);
+    border:1px solid var(--borda);border-radius:var(--raio);
+    display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
+  .itens-pedido tbody tr:hover{background:var(--branco)}
+  .itens-pedido tbody td{padding:0;border:none}
+  .itens-pedido td[data-rot]::before{content:attr(data-rot);display:block;font-size:11px;
+    font-weight:500;color:var(--fraco);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
+  .itens-pedido td[data-rot] input{width:100%;height:40px;border-color:var(--borda-campo);
+    background:var(--branco);font-size:15px}        /* 15px evita o zoom do iPhone ao focar */
+  .itens-pedido td[data-rot] input.dir{text-align:left}
+  /* descricao e o que a pessoa le primeiro: linha inteira, antes do codigo.
+     Subir ela tambem fecha os buracos que sobravam na grade de duas colunas. */
+  .celula-descricao{grid-column:1 / -1;order:-1}
+  .celula-total{grid-column:1 / -1;display:flex;align-items:baseline;justify-content:space-between;
+    gap:10px;border-top:1px solid var(--linha);padding-top:10px}
+  .celula-total::before{margin-bottom:0}
+  .celula-total b{font-size:17px}
+  /* o × fica no canto do cartao, longe dos campos, com alvo de toque maior */
+  .celula-remover{position:absolute;top:8px;right:8px;padding:0}
+  .celula-remover .btn{width:32px;height:32px;padding:0;border-radius:8px}
+  .itens-pedido td.vazio{grid-column:1 / -1;padding:28px 16px}
+  .itens-pedido tbody tr:has(td.vazio){border:none;background:none;padding:0;margin:0;display:block}
+  /* o cartao ja quebra sozinho: rolagem lateral aqui so atrapalha */
+  .itens-pedido ~ *,.cartao-corpo .tabela-rolagem:has(.itens-pedido){overflow-x:visible}
+}
 .btn-x{width:30px;height:30px;border:none;background:none;border-radius:7px;cursor:pointer;
   color:#a39e95;font-size:16px;line-height:1}
 .btn-x:hover{background:var(--vermelho-claro);color:var(--vermelho)}

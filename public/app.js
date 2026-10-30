@@ -1841,21 +1841,21 @@ function editor(tipoPadrao) {
     function desenharItens() {
       $('#corpo-itens').innerHTML = itens.length ? itens.map((it, i) => `
         <tr data-i="${i}" class="${it._vozDuvida ? 'item-duvida' : ''}">
-          <td><input value="${esc(it.codigo || '')}" data-c="codigo" ${bloqueado ? 'readonly' : ''}></td>
-          <td><input value="${esc(it.descricao || '')}" data-c="descricao" ${bloqueado ? 'readonly' : ''}>
+          <td data-rot="Código"><input value="${esc(it.codigo || '')}" data-c="codigo" ${bloqueado ? 'readonly' : ''}></td>
+          <td data-rot="Descrição" class="celula-descricao"><input value="${esc(it.descricao || '')}" data-c="descricao" ${bloqueado ? 'readonly' : ''}>
             ${it._vozDuvida ? `<div class="voz-escolha">
               <small>você disse “${esc(it._vozFalado || '')}” — confirme qual produto:</small>
               <div class="chips">${(it._vozCandidatos || []).map((c, j) =>
                 `<button type="button" class="chip" data-voz="${i}" data-c2="${j}">${esc(c.descricao)}</button>`).join('')}
                 <button type="button" class="chip chip-ok" data-voz="${i}" data-c2="-1">manter como está</button></div>
             </div>` : ''}</td>
-          <td><input value="${esc(it.unidade || 'UN')}" data-c="unidade" ${bloqueado ? 'readonly' : ''}></td>
-          <td><input type="number" step="0.001" min="0" class="dir" value="${n(it.quantidade)}" data-c="quantidade" ${bloqueado ? 'readonly' : ''}></td>
-          <td><input type="number" step="0.01" min="0" class="dir" value="${n(it.preco_unit)}" data-c="preco_unit" ${bloqueado ? 'readonly' : ''}></td>
-          <td><input type="number" step="0.01" min="0" class="dir" value="${n(it.desconto_pct)}" data-c="desconto_pct" ${bloqueado ? 'readonly' : ''}></td>
-          <td><input type="number" step="0.01" min="0" class="dir" value="${n(it.ipi_pct)}" data-c="ipi_pct" ${bloqueado ? 'readonly' : ''}></td>
-          <td class="dir mono"><b>${dinheiro(n(it.quantidade) * n(it.preco_unit) * (1 - n(it.desconto_pct) / 100))}</b></td>
-          <td class="cen">${bloqueado ? '' : `<a class="btn btn-peq btn-perigo" data-remover="${i}">×</a>`}</td>
+          <td data-rot="Un"><input value="${esc(it.unidade || 'UN')}" data-c="unidade" ${bloqueado ? 'readonly' : ''}></td>
+          <td data-rot="Qtd"><input type="number" step="0.001" min="0" class="dir" value="${n(it.quantidade)}" data-c="quantidade" ${bloqueado ? 'readonly' : ''}></td>
+          <td data-rot="Preço"><input type="number" step="0.01" min="0" class="dir" value="${n(it.preco_unit)}" data-c="preco_unit" ${bloqueado ? 'readonly' : ''}></td>
+          <td data-rot="Desc %"><input type="number" step="0.01" min="0" class="dir" value="${n(it.desconto_pct)}" data-c="desconto_pct" ${bloqueado ? 'readonly' : ''}></td>
+          <td data-rot="IPI %"><input type="number" step="0.01" min="0" class="dir" value="${n(it.ipi_pct)}" data-c="ipi_pct" ${bloqueado ? 'readonly' : ''}></td>
+          <td class="dir mono celula-total" data-rot="Total"><b>${dinheiro(n(it.quantidade) * n(it.preco_unit) * (1 - n(it.desconto_pct) / 100))}</b></td>
+          <td class="cen celula-remover">${bloqueado ? '' : `<a class="btn btn-peq btn-perigo" data-remover="${i}">×</a>`}</td>
         </tr>`).join('')
         : `<tr><td colspan="9" class="vazio"><b>Nenhum item</b>Clique em “Adicionar produto” para montar o ${eCot ? 'orçamento' : 'pedido'}.</td></tr>`;
       totais();
@@ -1865,7 +1865,8 @@ function editor(tipoPadrao) {
       const it = itens[Number(tr.dataset.i)], c = e.target.dataset.c;
       if (!it || !c) return;
       it[c] = ['descricao', 'codigo', 'unidade'].includes(c) ? e.target.value : n(e.target.value);
-      tr.cells[7].innerHTML = `<b>${dinheiro(n(it.quantidade) * n(it.preco_unit) * (1 - n(it.desconto_pct) / 100))}</b>`;
+      tr.querySelector('.celula-total').innerHTML =
+        `<b>${dinheiro(n(it.quantidade) * n(it.preco_unit) * (1 - n(it.desconto_pct) / 100))}</b>`;
       totais();
     });
     $('#corpo-itens').addEventListener('click', e => {
