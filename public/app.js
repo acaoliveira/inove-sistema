@@ -1202,19 +1202,37 @@ telas.comissoes = async () => {
     <button class="btn btn-primario" id="btn-filtrar">Filtrar</button>
   </div>
 
-  <div class="cartao"><div class="cartao-corpo">
+  <div class="cartao"><div class="cartao-tit">Resumo do período</div><div class="cartao-corpo">
+    <div class="faixa-rot">Venda</div>
     <div class="resumo-comissao">
-      <div><div class="rot">A receber</div><div class="val">${dinheiro(r.pendente)}</div>
-        <div class="obs">${r.qtd_pendente} pedido(s)</div></div>
-      <div><div class="rot">Já recebida</div><div class="val">${dinheiro(r.recebida)}</div>
-        <div class="obs">${r.qtd_recebida} pedido(s)</div></div>
-      <div><div class="rot">Total do período</div><div class="val">${dinheiro(r.total)}</div>
-        <div class="obs">${r.qtd_total} pedido(s)</div></div>
+      <div><div class="rot">Vendido (bruto)</div><div class="val">${dinheiro(r.vendido)}</div>
+        <div class="obs">${r.qtd_pedidos} pedido(s)</div></div>
+      <div class="menos"><div class="rot">Devolvido</div>
+        <div class="val neg">${dev.resumo.valor ? '- ' : ''}${dinheiro(dev.resumo.valor)}</div>
+        <div class="obs">${dev.resumo.qtd} devolução(ões)</div></div>
+      <div class="destaque"><div class="rot">Venda líquida</div>
+        <div class="val">${dinheiro(r.vendido - dev.resumo.valor)}</div>
+        <div class="obs">bruto menos devoluções</div></div>
+    </div>
+
+    <div class="faixa-rot">Comissão</div>
+    <div class="resumo-comissao">
+      <div><div class="rot">Comissão (bruta)</div><div class="val">${dinheiro(r.total)}</div>
+        <div class="obs">${r.qtd_total} pedido(s) com comissão</div></div>
+      <div class="menos"><div class="rot">Estorno das devoluções</div>
+        <div class="val neg">${dev.resumo.estorno ? '- ' : ''}${dinheiro(dev.resumo.estorno)}</div>
+        <div class="obs">pela % de cada pedido</div></div>
+      <div class="destaque"><div class="rot">Comissão líquida</div>
+        <div class="val">${dinheiro(r.total - dev.resumo.estorno)}</div>
+        <div class="obs">a receber ${dinheiro(r.pendente - dev.resumo.estorno)} • já recebida ${dinheiro(r.recebida)}</div></div>
     </div>
     ${graficoProporcao([
       { nome: 'Recebida', valor: r.recebida, cor: COR_OK, obs: r.qtd_recebida + ' pedido(s)' },
-      { nome: 'A receber', valor: r.pendente, cor: COR_ESPERA, obs: r.qtd_pendente + ' pedido(s)' },
+      // já com o estorno descontado, senão o gráfico brigaria com o número acima
+      { nome: 'A receber', valor: Math.max(0, r.pendente - dev.resumo.estorno), cor: COR_ESPERA,
+        obs: r.qtd_pendente + ' pedido(s), já sem as devoluções' },
     ])}
+    <small class="ajuda">As devoluções contam pela data em que foram lançadas, não pela data do pedido.</small>
   </div></div>
 
   <div class="cartao"><div class="cartao-tit">Pedidos do período
