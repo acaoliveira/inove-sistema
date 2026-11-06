@@ -239,12 +239,16 @@ module.exports = function (rota, ErroApi) {
     const soma = (st) => db.prepare(`SELECT IFNULL(SUM(p.comissao_valor),0) v, COUNT(*) q FROM pedidos p
       WHERE ${ondeBase} AND IFNULL(p.comissao_status,'pendente') = ?`).get(...argsBase, st);
     const pend = soma('pendente'), receb = soma('recebida');
+    // a venda do período, para a tela mostrar de onde saiu a comissão
+    const venda = db.prepare(`SELECT IFNULL(SUM(p.total),0) v, COUNT(*) q FROM pedidos p
+      WHERE ${ondeBase}`).get(...argsBase);
     return {
       lista,
       resumo: {
         pendente: pend.v, qtd_pendente: pend.q,
         recebida: receb.v, qtd_recebida: receb.q,
         total: pend.v + receb.v, qtd_total: pend.q + receb.q,
+        vendido: venda.v, qtd_pedidos: venda.q,
       },
     };
   });
